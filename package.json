@@ -15,7 +15,10 @@
     "dev:backend": "npm run dev -w packages/backend",
     "build": "npm run build -w packages/shared && npm run build -w packages/backend && npm run build -w packages/frontend",
     "start": "npm run start -w packages/backend",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "backend:stop": "npm run stop -w packages/backend",
+    "backend:status": "npm run status -w packages/backend",
+    "backend:kill": "npm run kill -w packages/backend"
   },
   "engines": {
     "node": ">=20"

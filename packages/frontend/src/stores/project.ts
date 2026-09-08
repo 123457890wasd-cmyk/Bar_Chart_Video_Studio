@@ -83,9 +83,23 @@ export const useProjectStore = defineStore('project', () => {
     project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
   }
 
+  /**
+   * 关闭当前项目（回到项目列表前调用）。
+   * dirty=true 时由 UI 层负责弹确认；这里只清 store，不动后端。
+   */
+  function closeProject() {
+    project.value = null;
+    series.value = [];
+    summary.value = null;
+    records.value = [];
+    draftConfig.value = { ...DEFAULT_RENDER_CONFIG };
+    dirty.value = false;
+  }
+
   return {
     project, series, summary, records, loading, saving,
     draftConfig, dirty, dataset, palette, colorOf,
     loadProject, loadSeries, loadRecords, importRows, saveConfig, clearData,
+    closeProject,
   };
 });

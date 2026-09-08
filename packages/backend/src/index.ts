@@ -5,14 +5,18 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import path from 'node:path';
 import { healthRoutes } from './routes/health';
 import { projectRoutes } from './routes/projects';
 import { datasetRoutes } from './routes/datasets';
 import { recordRoutes } from './routes/records';
 import { datasourceRoutes } from './routes/datasources';
+import db, { DATA_DIR } from './db';
 
 const PORT = Number(process.env.PORT ?? 9200);
 const HOST = process.env.HOST ?? '127.0.0.1';
+const PID_FILE = process.env.PID_FILE ?? path.join(DATA_DIR, 'backend.pid');
 
 const app = Fastify({
   logger: { level: 'warn' },
@@ -41,6 +45,63 @@ app.setErrorHandler((err, _req, reply) => {
   reply.status(status).send({ error: { code: status === 500 ? 'E_INTERNAL' : code, message: e.message } });
 });
 
-app.listen({ port: PORT, host: HOST }).then(() => {
+// ---- 启动 ----
+try {
+  await app.listen({ port: PORT, host: HOST });
   console.log(`[backend] listening on http://${HOST}:${PORT} (API: /api/v1)`);
+  writeFileSync(PID_FILE, String(process.pid));
+  console.log(`[backend] PID ${process.pid} written to ${PID_FILE}`);
+} catch (e) {
+  console.error('[backend] startup failed:', (e as Error).message);
+  process.exit(1);
+}
+
+// ---- 优雅关闭 ----
+// 设计要点：
+// 1) 信号只处理一次（避免重复触发）
+// 2) 关闭顺序：Fastify 先 close（拒绝新连接 + drain 在飞请求），再关 SQLite（flush WAL）
+// 3) 5 秒强制 timeout 兜底，避免关闭过程卡死永远不退出
+// 4) 任何路径都尝试清 PID 文件
+let shuttingDown = false;
+async function gracefulShutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[backend] received ${signal}, shutting down gracefully…`);
+
+  const forceKill = setTimeout(() => {
+    console.error('[backend] shutdown timed out, forcing exit');
+    process.exit(1);
+  }, 5000);
+  forceKill.unref();
+
+  try {
+    // 1. 先关 Fastify：拒绝新连接、等待在飞请求完成
+    await app.close();
+    console.log('[backend] fastify closed');
+    // 2. 再关 SQLite：flush WAL、释放文件锁（避免下次启动 lock busy）
+    db.close();
+    console.log('[backend] sqlite closed');
+    // 3. 清 PID 文件
+    if (existsSync(PID_FILE)) {
+      try { unlinkSync(PID_FILE); } catch { /* 别人删了也不要紧 */ }
+      console.log(`[backend] removed ${PID_FILE}`);
+    }
+    clearTimeout(forceKill);
+    console.log('[backend] shutdown complete');
+    process.exit(0);
+  } catch (e) {
+    console.error('[backend] shutdown error:', (e as Error).message);
+    process.exit(1);
+  }
+}
+
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(sig, () => void gracefulShutdown(sig));
+}
+
+// 兜底：进程退出前最后一次清 PID 文件（防止被 SIGKILL 杀死后残留）
+process.on('exit', () => {
+  if (existsSync(PID_FILE)) {
+    try { unlinkSync(PID_FILE); } catch { /* ignore */ }
+  }
 });

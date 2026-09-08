@@ -10,6 +10,17 @@
         <RouterLink :to="`/projects/${projectId}/data`">数据</RouterLink>
         <RouterLink :to="`/projects/${projectId}/edit`">编辑器</RouterLink>
         <RouterLink :to="`/projects/${projectId}/export`">导出</RouterLink>
+        <span class="dirty-mark" v-if="dirty" title="有未保存的配置改动">●</span>
+        <button
+          v-if="projectId"
+          class="close-btn"
+          type="button"
+          @click="onClose"
+          aria-label="关闭当前项目，返回项目列表"
+          title="关闭当前项目"
+        >
+          关闭项目
+        </button>
       </nav>
     </header>
     <main class="app-main">
@@ -19,11 +30,44 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useRoute } from 'vue-router';
+/**
+ * App root 与导航（方案 §2.3 页面骨架）
+ * 顶部 nav 显示项目内三个 tab + 「关闭项目」。
+ * 关闭项目时若有未保存改动（store.dirty=true）必须弹确认；
+ * 同步注册 beforeunload 防止浏览器关窗丢失草稿。
+ */
+import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
+import { useProjectStore } from './stores/project';
 
+const store = useProjectStore();
 const route = useRoute();
+const router = useRouter();
+
 const projectId = computed(() => (route.params.id ? Number(route.params.id) : null));
+const dirty = computed(() => store.dirty);
+
+/** 关闭当前项目。先检查 dirty，再决定是否弹 confirm */
+async function onClose() {
+  if (store.dirty) {
+    const ok = window.confirm(
+      '当前项目有未保存的配置改动。\n\n确定要放弃这些改动并返回项目列表吗？',
+    );
+    if (!ok) return;
+  }
+  store.closeProject();
+  await router.push('/');
+}
+
+/** 浏览器关窗 / 刷新页面前的全局守门员 */
+function beforeUnload(e: BeforeUnloadEvent) {
+  if (!store.dirty) return;
+  e.preventDefault();
+  e.returnValue = '有未保存的配置改动，确定离开吗？';
+}
+
+onMounted(() => window.addEventListener('beforeunload', beforeUnload));
+onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 </script>
 
 <style scoped>
@@ -43,11 +87,31 @@ const projectId = computed(() => (route.params.id ? Number(route.params.id) : nu
 .brand-mark { color: var(--accent); font-weight: 800; font-size: 22px; }
 .brand-name { font-weight: 700; font-size: 16px; }
 .brand-sub { font-size: 12px; color: var(--sub); }
-.app-nav { display: flex; gap: 4px; }
+.app-nav { display: flex; gap: 4px; align-items: center; }
 .app-nav a {
   padding: 6px 14px; border-radius: 8px; text-decoration: none;
   color: var(--sub); font-size: 14px; font-weight: 500;
 }
 .app-nav a.router-link-active { background: var(--accent-soft); color: var(--accent); }
+.dirty-mark {
+  color: var(--accent, #f59e0b);
+  font-size: 12px;
+  margin: 0 6px 0 4px;
+  animation: dirty-pulse 2s ease-in-out infinite;
+}
+@keyframes dirty-pulse { 0%, 100% { opacity: 0.5 } 50% { opacity: 1 } }
+.close-btn {
+  margin-left: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.close-btn:hover { background: var(--accent-soft, rgba(99,102,241,0.08)); border-color: var(--accent, #6366f1); }
 .app-main { min-height: calc(100vh - 52px); }
 </style>
