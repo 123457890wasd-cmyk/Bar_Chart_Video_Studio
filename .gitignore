@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+*.tsbuildinfo
+
+# backend data & storage
+packages/backend/data/
+packages/backend/storage/
+*.db
+*.db-journal
+
+# env
+.env
+.env.local
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+
+# logs
+*.log
+npm-debug.log*

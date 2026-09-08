@@ -1,0 +1,55 @@
+import { z } from 'zod';
+import { DEFAULT_RENDER_CONFIG } from './types';
+
+/** 渲染配置 schema：PATCH 允许部分更新 */
+export const renderConfigSchema = z.object({
+  title: z.string().max(120).default(DEFAULT_RENDER_CONFIG.title),
+  subtitle: z.string().max(200).default(''),
+  sourceNote: z.string().max(120).default(DEFAULT_RENDER_CONFIG.sourceNote),
+  maxBars: z.number().int().min(1).max(100).default(15),
+  secondsPerStep: z.number().min(0.1).max(10).default(1.0),
+  headHold: z.number().min(0).max(5).default(0.5),
+  tailHold: z.number().min(0).max(5).default(0.5),
+  palette: z.string().default('flat'),
+  showValues: z.boolean().default(true),
+  valueDecimals: z.number().int().min(0).max(4).default(0),
+  showRank: z.boolean().default(true),
+  timeLabelPos: z.enum(['top-left', 'top-right', 'none']).default('top-right'),
+  timeLabelMode: z.enum(['step', 'continuous']).default('step'),
+  fontScale: z.number().min(0.6).max(1.6).default(1),
+  background: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#f5f6fa'),
+  width: z.number().int().min(640).max(3840).default(1920),
+  height: z.number().int().min(360).max(3840).default(1080),
+  fps: z.number().int().min(10).max(60).default(30),
+  videoBitsPerSecond: z.number().int().min(1_000_000).max(40_000_000).default(8_000_000),
+});
+
+/** 长表导入 payload */
+export const importPayloadSchema = z.object({
+  rows: z.array(z.object({
+    time_key: z.string().min(1).max(64),
+    entity: z.string().min(1).max(200),
+    value: z.number(),
+  })).min(1),
+  /** 是否补 0：实体在某时间点缺失时 */
+  fillMissingWithZero: z.boolean().default(true),
+});
+
+export const createProjectSchema = z.object({
+  title: z.string().min(1).max(120).default('未命名项目'),
+  description: z.string().max(2000).optional().nullable(),
+  config: renderConfigSchema.partial().optional(),
+});
+
+export const updateProjectSchema = z.object({
+  title: z.string().min(1).max(120).optional(),
+  description: z.string().max(2000).nullable().optional(),
+  config: renderConfigSchema.partial().optional(),
+});
+
+export const createRecordSchema = z.object({
+  project_id: z.number().int().positive(),
+  config_snapshot: renderConfigSchema,
+  duration_ms: z.number().int().min(0).default(0),
+  size_bytes: z.number().int().min(0).default(0),
+});
