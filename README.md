@@ -1,4 +1,4 @@
-# 条形图竞赛工作室 · Bar Chart Video Studio
+# 条形图视频生成工作室 · Bar Chart Video Studio
 
 > 导入一段「时间 × 实体 × 数值」的统计表，自动生成条形图随时间变化的动态视频（bar chart race），一键导出 mp4 用于发布。
 > 单机单用户 Web 应用：渲染与录屏全在浏览器完成，零服务器算力。
