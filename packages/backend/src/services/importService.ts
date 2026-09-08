@@ -33,8 +33,17 @@ function assignTimeOrder(rows: TimeSeriesRow[]): Map<string, number> {
 export function importSeries(projectId: number, rows: TimeSeriesRow[]): ImportResult {
   const orderMap = assignTimeOrder(rows);
 
-  // 预校验：数值有限性
-  const valid = rows.filter(r => Number.isFinite(r.value));
+  // 预校验：跳过空 time_key / 空 entity / value 非有限数（value 允许 string，统一 Number() 转换）
+  const valid = rows.filter(r => {
+    if (!r.time_key || !r.time_key.trim()) return false;
+    if (!r.entity || !r.entity.trim()) return false;
+    const v = typeof r.value === 'string' ? Number(r.value) : r.value;
+    return Number.isFinite(v);
+  }).map(r => ({
+    time_key: r.time_key,
+    entity: r.entity,
+    value: typeof r.value === 'string' ? Number(r.value) : r.value as number,
+  }));
   const skipped = rows.length - valid.length;
 
   const hash = contentHash(JSON.stringify(valid.map(r => [r.time_key, r.entity, r.value])));

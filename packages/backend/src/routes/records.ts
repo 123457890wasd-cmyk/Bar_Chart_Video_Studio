@@ -74,6 +74,10 @@ export async function recordRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: { code: 'E_NOT_FOUND', message: '成片文件不存在（可能未上传存档）' } });
     }
     const full = path.join(STORAGE_DIR, row.file_path);
+    // 显式设置 Content-Length，否则 Node 读 stream 时部分客户端/代理会显示 0
+    const stat = (await import('node:fs')).statSync(full);
+    reply.header('content-length', String(stat.size));
+    reply.header('content-type', row.format === 'webm' ? 'video/webm' : 'video/mp4');
     return (reply as any).send(createReadStream(full));
   });
 
