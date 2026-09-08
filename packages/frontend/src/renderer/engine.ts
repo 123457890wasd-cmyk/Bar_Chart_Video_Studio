@@ -18,6 +18,12 @@ export interface DrawOptions {
   config: RenderConfig;
   palette: Palette;
   colorOf: (entity: string) => string;
+  /**
+   * 预算的实体名标签区宽度（像素，1080p 基准）。由外层（BarChartCanvas）按 dataset.entities
+   * 全集预算后传入，以保证排名变化时实体名区域不抖动——避免每帧 measureText 重算
+   * 同时也防止「长名字新入选时溢出布局」的问题。若未提供则回退到帧内 bars 测量（不推荐）。
+   */
+  labelWidth?: number;
 }
 
 const FONT_STACK = '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif';
@@ -87,9 +93,10 @@ export class BarRaceRenderer {
     const x0 = plotLeft;
     const x1 = plotLeft + plotW;
 
-    // ---- 比例尺：当前帧最大值 × 1.05（bar race 惯例：头名恒接近满宽）----
+    // ---- 比例尺：当前帧最大绝对值 × 1.05（bar race 惯例：头名恒接近满宽）----
+    // 用 max(|value|) 以支持正负混合场景，避免全负数据时 scaleMax 为负致绘制反向
     let maxVal = 0;
-    for (const b of frame.bars) maxVal = Math.max(maxVal, b.value);
+    for (const b of frame.bars) maxVal = Math.max(maxVal, Math.abs(b.value));
     const scaleMax = maxVal > 0 ? maxVal * 1.05 : 1;
     const xOf = (v: number) => x0 + (Math.max(v, 0) / scaleMax) * plotW;
 

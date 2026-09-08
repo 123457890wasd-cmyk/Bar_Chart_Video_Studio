@@ -81,6 +81,13 @@ export async function exportVideo(opts: ExportVideoOptions): Promise<ExportResul
   const ctx = canvas.getContext('2d', { alpha: false });
   if (!ctx) throw new Error('无法创建 2D 绘图上下文');
 
+  // ---- 预算实体名标签区宽度（dataset.entities 全集一次性预算，保持跨帧稳定）----
+  const s = config.width / 1920;
+  const fs = config.fontScale;
+  const nameFont = `700 ${30 * s * fs}px "PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif`;
+  const measuredName = renderer.measureLabelWidth(dataset.entities, nameFont, ctx);
+  const labelWidth = Math.min(460 * s, Math.max(120 * s, measuredName));
+
   const { mime, direct } = pickMimeType();
 
   const manualMode = (() => {
@@ -119,7 +126,7 @@ export async function exportVideo(opts: ExportVideoOptions): Promise<ExportResul
 
   // ---- 墙钟驱动渲染循环：按目标帧时刻自校正漂移 ----
   await new Promise<void>((resolve, reject) => {
-    const drawOptions = { width: config.width, height: config.height, config, palette, colorOf };
+    const drawOptions = { width: config.width, height: config.height, config, palette, colorOf, labelWidth };
 
     const drawAt = (elapsedMs: number) => {
       const p = Math.min(elapsedMs / 1000 / duration, 1);

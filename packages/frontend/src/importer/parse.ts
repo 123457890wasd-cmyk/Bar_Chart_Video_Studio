@@ -23,24 +23,40 @@ export type TableMode = 'long' | 'wide-by-row' | 'wide-by-col';
 // wide-by-row: 第一列 = 时间，其余各列 = 实体（政府 CSV 常见）
 // wide-by-col: 第一列 = 实体，其余各列 = 时间
 
-/** 文本解码：UTF-8 优先，失败转 GBK */
+/** 文本解码：BOM 剥离 → UTF-8 严格 → GBK → 兜底替换（方案 §9） */
 export async function decodeFile(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
+  let text: string;
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
   } catch {
     try {
-      return new TextDecoder('gbk').decode(buf);
+      text = new TextDecoder('gbk').decode(buf);
     } catch {
-      return new TextDecoder('utf-8').decode(buf);
+      text = new TextDecoder('utf-8').decode(buf);
     }
   }
+  return stripBOM(text);
+}
+
+/** 去掉开头 BOM 字符（UTF-8 \uFEFF / UTF-16 LE / BE 等） */
+export function stripBOM(text: string): string {
+  return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
 }
 
 export function parseDelimitedText(text: string): ParsedTable {
-  const t = text.trim();
+  const t0 = stripBOM(text).trim();
+
+  // 全角分隔符归一化（Excel 中文版默认导出 ',' ';' '"' 等全角字符）
+  // 仅当第一行主要是全角标点时才替换，避免破坏字符串内的 ASCII 标点
+  const firstLineRaw = t0.split(/\r?\n/)[0] ?? '';
+  const cnComma = (firstLineRaw.match(/，/g) ?? []).length;
+  const enComma = (firstLineRaw.match(/,/g) ?? []).length;
+  const useFullWidthComma = cnComma >= Math.max(1, enComma);
+  const t = useFullWidthComma ? t0.replace(/，/g, ',').replace(/；/g, ';') : t0;
+
   const firstLine = t.split(/\r?\n/)[0] ?? '';
-  const isTsv = firstLine.includes('\t') && !firstLine.includes(',');
+  const isTsv = firstLine.includes('\t') && !firstLine.includes(',') && !firstLine.includes(';');
   const result = Papa.parse<string[]>(t, {
     header: false,
     skipEmptyLines: 'greedy',
@@ -52,12 +68,13 @@ export function parseDelimitedText(text: string): ParsedTable {
 }
 
 export function parseCsvFile(text: string): ParsedTable {
-  const result = Papa.parse<string[]>(text.trim(), {
+  const result = Papa.parse<string[]>(stripBOM(text).trim(), {
     header: false,
     skipEmptyLines: 'greedy',
   });
   const rows = (result.data as string[][]).map(r => r.map(c => (c ?? '').trim()));
-  const fields = rows.shift() ?? [];
+  // 字段名也去 BOM（防止 header 第一个字段被污染导致列映射失效）
+  const fields = (rows.shift() ?? []).map(f => stripBOM(f));
   return { fields, rows, source: 'csv' };
 }
 

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import db from '../db';
-import { importSeries, getSeries, getSummary, parseLongCsv } from '../services/importService';
+import { importSeriesRaw, getSeries, getSummary, parseLongCsv } from '../services/importService';
 import { importPayloadSchema } from '@barstudio/shared';
 import { notFound, validationError } from './projects';
 
@@ -16,7 +16,7 @@ export async function datasetRoutes(app: FastifyInstance) {
     if (rows.length === 0) {
       return reply.status(400).send({ error: { code: 'E_EMPTY_TIMESERIES', message: '没有可导入的数据行' } });
     }
-    const result = importSeries(id, rows);
+    const result = importSeriesRaw(id, rows);
     return reply.status(201).send({ data: { ...result, summary: getSummary(id) } });
   });
 
@@ -64,7 +64,7 @@ export async function datasetRoutes(app: FastifyInstance) {
     if (rows.length === 0) {
       return reply.status(400).send({ error: { code: 'E_CSV_PARSE', message: errors.join('; ') || 'CSV 中没有有效数据' } });
     }
-    const result = importSeries(id, rows);
+    const result = importSeriesRaw(id, rows);
     return reply.status(201).send({ data: { ...result, warnings: errors, summary: getSummary(id) } });
   });
 

@@ -28,6 +28,9 @@ const canvasEl = ref<HTMLCanvasElement>();
 
 let resizeObserver: ResizeObserver | null = null;
 
+/** 预算的实体名标签区宽度（跨帧稳定，避免排名变化时布局抖动） */
+const labelWidth = ref(0);
+
 function paint(orderF: number) {
   const canvas = canvasEl.value;
   if (!canvas) return;
@@ -40,6 +43,7 @@ function paint(orderF: number) {
     config: props.config,
     palette: props.palette,
     colorOf: props.colorOf,
+    labelWidth: labelWidth.value || undefined,
   }, ctx);
 }
 
@@ -55,9 +59,27 @@ function resize() {
   if (canvas.width !== targetW || canvas.height !== targetH) {
     canvas.width = targetW;
     canvas.height = targetH;
+    // 画布尺寸变了重算 label 预算
+    recomputeLabelWidth();
   }
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
+}
+
+/** 按 dataset.entities 全集 + config.fontScale 预算最长实体名宽度（稳定） */
+function recomputeLabelWidth() {
+  const canvas = canvasEl.value;
+  if (!canvas || !props.dataset || props.dataset.entities.length === 0) {
+    labelWidth.value = 0;
+    return;
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const s = canvas.width / 1920;
+  const fs = props.config.fontScale;
+  const nameFont = `700 ${30 * s * fs}px "PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif`;
+  const measured = renderer.measureLabelWidth(props.dataset.entities, nameFont, ctx);
+  labelWidth.value = Math.min(460 * s, Math.max(120 * s, measured));
 }
 
 onMounted(() => {
@@ -67,6 +89,7 @@ onMounted(() => {
   });
   if (wrapEl.value) resizeObserver.observe(wrapEl.value);
   resize();
+  recomputeLabelWidth();
   paint(0);
 });
 
@@ -88,7 +111,10 @@ function renderProgress(p: number) {
   renderAt(orderF);
 }
 
-watch(() => [props.config, props.dataset], () => paint(lastOrderF.value), { deep: true });
+watch(() => [props.config, props.dataset], () => {
+  recomputeLabelWidth();
+  paint(lastOrderF.value);
+}, { deep: true });
 
 defineExpose({ renderAt, renderProgress });
 </script>

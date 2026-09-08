@@ -14,6 +14,9 @@ export interface ImportResult {
   dataset_hash: string;
 }
 
+/** 宽松入参：value 字段可能缺失（zod 默认 schema 不强制字段存在），由后端过滤 */
+export type ImportRowInput = { time_key: unknown; entity: unknown; value?: unknown };
+
 /**
  * time_order 赋值策略（方案 §4.4）：
  * 1) 若所有 time_key 都可解析为数值 → 按数值升序（年份/月份数字等）；
@@ -31,20 +34,30 @@ function assignTimeOrder(rows: TimeSeriesRow[]): Map<string, number> {
 }
 
 export function importSeries(projectId: number, rows: TimeSeriesRow[]): ImportResult {
-  const orderMap = assignTimeOrder(rows);
+  return importSeriesRaw(projectId, rows);
+}
 
+/** 接受 {time_key,entity,value} 三元组，value 允许 string|null|undefined；内部 Number() 清洗 */
+export function importSeriesRaw(projectId: number, rows: ImportRowInput[]): ImportResult {
   // 预校验：跳过空 time_key / 空 entity / value 非有限数（value 允许 string，统一 Number() 转换）
-  const valid = rows.filter(r => {
-    if (!r.time_key || !r.time_key.trim()) return false;
-    if (!r.entity || !r.entity.trim()) return false;
+  // 注意：assignTimeOrder 必须在 valid 之后，否则原始含空格的 time_key 与 trim 后的 key 算出的 orderMap 对不上
+  const stripBOM = (s: string) => s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s;
+  const normalizeKey = (v: unknown) => stripBOM(String(v ?? '')).trim();
+  const valid: TimeSeriesRow[] = rows.filter(r => {
+    const tk = normalizeKey(r.time_key);
+    const en = normalizeKey(r.entity);
+    if (!tk || !en) return false;
     const v = typeof r.value === 'string' ? Number(r.value) : r.value;
     return Number.isFinite(v);
   }).map(r => ({
-    time_key: r.time_key,
-    entity: r.entity,
+    time_key: normalizeKey(r.time_key),
+    entity: normalizeKey(r.entity),
     value: typeof r.value === 'string' ? Number(r.value) : r.value as number,
   }));
   const skipped = rows.length - valid.length;
+
+  // ★ 关键：assignTimeOrder 必须接收 trim 后的 rows，与 valid 输入一致
+  const orderMap = assignTimeOrder(valid);
 
   const hash = contentHash(JSON.stringify(valid.map(r => [r.time_key, r.entity, r.value])));
 

@@ -53,7 +53,11 @@ export const useProjectStore = defineStore('project', () => {
   async function importRows(rows: { time_key: string; entity: string; value: number }[]) {
     if (!project.value) return;
     await api.post(`/projects/${project.value.id}/datasets/import`, { rows });
-    await loadProject(project.value.id);
+    // 只刷新数据相关字段，保留 draftConfig（用户的未保存草稿不应被 DB 内容覆盖）
+    await loadSeries();
+    // 重新同步 project 元数据（dataset_hash/updated_at 等），但不重置 draftConfig
+    const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
+    project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
   }
 
   async function saveConfig() {
@@ -73,7 +77,10 @@ export const useProjectStore = defineStore('project', () => {
   async function clearData() {
     if (!project.value) return;
     await api.del(`/projects/${project.value.id}/datasets`);
-    await loadProject(project.value.id);
+    // 局部刷新：避免覆盖用户当前未保存的 draftConfig 草稿
+    await loadSeries();
+    const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
+    project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
   }
 
   return {

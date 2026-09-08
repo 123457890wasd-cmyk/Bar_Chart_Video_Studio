@@ -24,12 +24,13 @@ export const renderConfigSchema = z.object({
   videoBitsPerSecond: z.number().int().min(1_000_000).max(40_000_000).default(8_000_000),
 });
 
-/** 长表导入 payload —— value 允许 string（让后端统一清洗为 number，符合方案 §9 缺失/异常值策略） */
+/** 长表导入 payload —— value 允许多种形态（由后端 importService 统一清洗为 number，符合方案 §9 缺失/异常值策略） */
 export const importPayloadSchema = z.object({
   rows: z.array(z.object({
     time_key: z.string().max(64),
     entity: z.string().max(200),
-    value: z.union([z.number(), z.string(), z.null(), z.undefined()]),
+    // z.unknown() 比 nullable + optional 更精确：保留所有入参，由后端过滤
+    value: z.unknown(),
   })).min(1),
   /** 是否补 0：实体在某时间点缺失时 */
   fillMissingWithZero: z.boolean().default(true),
