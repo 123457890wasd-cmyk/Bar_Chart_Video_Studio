@@ -174,6 +174,37 @@ assert(tCN.fields.length === 3 && tCN.fields[0] === '时间', '中文逗号分�
 assert(tCN.rows[0][1] === '公司A', '中文逗号分隔第二列 entity',
   `cell='${tCN.rows[0][1]}'`);
 
+// ★ 省份代码防御（2026-09-09 真 bug 回归）：
+// 政府统计 xlsx 常见 [年份, 省份, 省份代码, 人均消费支出(元)]。
+// 旧版兜底逻辑按"数值比例最高"选 value，「省份代码」(100% 数字但恒定) 会击败
+// 有空值的真实统计列 → 条形图一动不动、只有时间标签在走。
+const govTable = {
+  fields: ['年份', '省份', '省份代码', '城镇居民人均消费支出(元)'],
+  rows: [
+    ['1990', '北京市', '110000', '1646'],
+    ['1991', '北京市', '110000', '1748'],
+    ['1990', '上海市', '310000', '1937'],
+    ['1991', '上海市', '310000', '2167'],
+    ['1990', '广东省', '440000', '1984'],
+    ['1991', '广东省', '440000', '2310'],
+  ],
+  source: 'text' as const,
+};
+const mGov = guessMapping(govTable as any);
+assert(mGov && mGov.time === '年份' && mGov.entity === '省份',
+  '省份列被识别为 entity（别名扩充）',
+  JSON.stringify(mGov));
+assert(mGov?.value === '城镇居民人均消费支出(元)',
+  '★ 省份代码不再被误选为 value（标识列防御）',
+  `value=${mGov?.value}`);
+assert(!mGov?.valueCandidates?.includes('省份代码'),
+  'valueCandidates 也不含省份代码',
+  JSON.stringify(mGov?.valueCandidates));
+const govLong = toLongRows(govTable as any, 'long', mGov ?? undefined);
+assert(govLong.rows.length === 6 && govLong.rows[0].value === 1646,
+  '政府表转换：value 是消费支出而非代码',
+  JSON.stringify(govLong.rows[0]));
+
 console.log(`\n${pass} 通过, ${fail} 失败`);
 if (fail) failList.forEach(f => console.log('  - ' + f));
 process.exit(fail ? 1 : 0);

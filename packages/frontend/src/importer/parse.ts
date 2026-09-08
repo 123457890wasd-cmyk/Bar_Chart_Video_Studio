@@ -155,8 +155,17 @@ export function guessMapping(table: ParsedTable): ColumnMapping | null {
     fields.find(f => aliases.some(a => f.toLowerCase().includes(a.toLowerCase())));
 
   let time = find(['time', '时间', '年份', 'year', '日期', 'date', 'quarter', '季度']);
-  let entity = find(['entity', '实体', '名称', '国家', '公司', 'name', '厂商', '品牌', '地区', '城市']);
-  let value = find(['value', '数值', '值', '数量', 'count', '产量', '销量', '出货量']);
+  let entity = find([
+    'entity', '实体', '名称', '国家', '公司', 'name', '厂商', '品牌', '地区', '城市',
+    // 政府统计常见：省份/地市/区县/机构
+    '省份', 'province', '地市', '区县', '机构', '单位', '行业', '区域',
+  ]);
+  let value = find([
+    'value', '数值', '值', '数量', 'count', '产量', '销量', '出货量',
+    // 经济统计常见指标词
+    '支出', '收入', '消费', 'gdp', '人均', '总额', '金额', '利润', '税收', '工资',
+    '人口', '面积', '增长', '增速', '指数', '价格', '房价', '零售额', '营业额',
+  ]);
 
   if (!time || !entity || !value) {
     // 兜底：找数值比例最高的列作 value，第一列作 time、第二列作 entity
@@ -166,7 +175,18 @@ export function guessMapping(table: ParsedTable): ColumnMapping | null {
       const numeric = nonEmpty.filter(r => Number.isFinite(Number(r[ci].replace(/[,，]/g, ''))));
       return numeric.length / nonEmpty.length;
     };
-    const ratios = fields.map((_, i) => (i < 2 ? -1 : numericRatio(i)));
+    // ★ 关键防御：排除"标识/编码"类列——它们 100% 是数字但语义上不是统计值
+    // （如「省份代码」110000：数值比例满格，但每行恒定，作为 value 会导致条形图一动不动）
+    const isIdentifierCol = (f: string) =>
+      /代码|code|id|编号|序号|邮编|区划/i.test(f);
+    // 值列还应是"有变化"的：同一列在不同行间有多个不同取值才像统计数据
+    const hasVariance = (ci: number) => {
+      const distinct = new Set(rows.map(r => r[ci]));
+      return distinct.size > 1;
+    };
+    const ratios = fields.map((f, i) =>
+      (i < 2 || isIdentifierCol(f) || !hasVariance(i)) ? -1 : numericRatio(i)
+    );
     const valueIdx = ratios.indexOf(Math.max(...ratios));
     if (valueIdx < 2) return null;
     time = fields[0];
@@ -174,9 +194,11 @@ export function guessMapping(table: ParsedTable): ColumnMapping | null {
     value = fields[valueIdx];
   }
 
-  // 候选"值列"：除时间/实体列外，其它可解析为数值的列都是候选
+  // 候选"值列"：除时间/实体/标识列外，其它可解析为数值的列都是候选
+  const isIdentifierCol2 = (f: string) => /代码|code|id|编号|序号|邮编|区划/i.test(f);
   const numericCols = fields.filter(f =>
-    f !== time && f !== entity && numericRatioOfColumn(rows, fields.indexOf(f)) > 0.4
+    f !== time && f !== entity && !isIdentifierCol2(f) &&
+    numericRatioOfColumn(rows, fields.indexOf(f)) > 0.4
   );
   return { time: time!, entity: entity!, value: value!, valueCandidates: numericCols.length ? numericCols : undefined };
 }
