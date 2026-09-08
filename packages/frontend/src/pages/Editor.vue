@@ -28,18 +28,45 @@
         <label class="field"><span>来源角标（左下角）</span>
           <input v-model="cfg.sourceNote" type="text" /></label>
 
+        <!--
+          ▶ 横坐标值列选取：仅当数据集携带多个值列（如 原始 / 插值 / 填补）
+          才显示此选择器。单值数据集显示占位提示，用户也可以去数据页重新导入。
+        -->
+        <label class="field" v-if="hasValueColumnChoice">
+          <span>横坐标（柱长）使用的数据列</span>
+          <select v-model="valueColumnChoice" @change="onValueColumnChange">
+            <option v-for="c in store.valueColumns" :key="c" :value="c">{{ c }}</option>
+          </select>
+          <span class="hint">切换后立即生效，便于对比同一数据集不同处理方式</span>
+        </label>
+        <div v-else class="hint-box">
+          当前为单值数据集（仅 1 个值列）。如需横坐标多列对比，请到「数据」页用长表多值列重新导入。
+        </div>
+
+        <!-- ▶ 显示条形数（maxBars）：直观滑块 1..50 -->
+        <div class="field slider-field">
+          <span>显示条形数（top N） · <b>{{ cfg.maxBars }}</b></span>
+          <input
+            v-model.number="cfg.maxBars"
+            type="range"
+            :min="1"
+            :max="50"
+            step="1"
+          />
+          <span class="hint">
+            共 {{ store.dataset.entities.length }} 个实体参与排名，只显示前 N 名。
+            调到 50 即全显示。
+          </span>
+        </div>
+
         <div class="row2">
-          <label class="field"><span>条数上限</span>
-            <input v-model.number="cfg.maxBars" type="number" min="1" max="100" /></label>
           <label class="field"><span>每段时间（秒）</span>
             <input v-model.number="cfg.secondsPerStep" type="number" min="0.1" max="10" step="0.1" /></label>
-        </div>
-        <div class="row2">
           <label class="field"><span>片头定格（秒）</span>
             <input v-model.number="cfg.headHold" type="number" min="0" max="5" step="0.1" /></label>
-          <label class="field"><span>片尾定格（秒）</span>
-            <input v-model.number="cfg.tailHold" type="number" min="0" max="5" step="0.1" /></label>
         </div>
+        <label class="field"><span>片尾定格（秒）</span>
+          <input v-model.number="cfg.tailHold" type="number" min="0" max="5" step="0.1" /></label>
 
         <label class="field"><span>配色方案</span>
           <select v-model="cfg.palette">
@@ -136,7 +163,19 @@ const projectId = computed(() => Number(route.params.id));
 const store = useProjectStore();
 
 const hasData = computed(() => (store.summary?.rowCount ?? 0) > 0);
-const cfg = store.draftConfig; // 草稿：即改即生效，保存才落库（方案 §3.2）
+const cfg = store.draftConfig; // 草稿：即改即生效，保存才落库
+
+const hasValueColumnChoice = computed(() =>
+  store.valueColumns.length > 1 || (store.valueColumns.length === 1 && store.valueColumns[0] !== 'value')
+);
+const valueColumnChoice = ref(cfg.valueColumn ?? store.activeValueColumn);
+watch(() => cfg.valueColumn, v => { valueColumnChoice.value = v ?? 'value'; }, { immediate: true });
+
+async function onValueColumnChange() {
+  if (valueColumnChoice.value && valueColumnChoice.value !== cfg.valueColumn) {
+    await store.switchValueColumn(valueColumnChoice.value);
+  }
+}
 
 const canvasRef = ref<InstanceType<typeof BarChartCanvas>>();
 const playing = ref(false);
@@ -155,7 +194,6 @@ const timeLabel = computed(() => {
   return times[idx].label;
 });
 
-// ---- 播放循环（预览 rAF，方案 §6.3）----
 let rafId = 0;
 let lastTs = 0;
 
@@ -180,7 +218,7 @@ function renderCurrent() {
 }
 
 function togglePlay() {
-  if (progress.value >= 1) progress.value = 0; // 播完重播
+  if (progress.value >= 1) progress.value = 0;
   playing.value = !playing.value;
   if (playing.value) {
     lastTs = 0;
@@ -188,27 +226,25 @@ function togglePlay() {
   }
 }
 
-/** 拖动进度条：跳到最近整时间点并重算（方案 §3.4，避免半帧残影困扰用户） */
 function onSeek(p: number) {
   progress.value = Math.min(Math.max(p, 0), 1);
   playing.value = false;
   renderCurrent();
 }
 
-/** 单步：跳到相邻整数时间点 */
 function stepTime(dir: 1 | -1) {
   playing.value = false;
   const orderF = progressToOrderF(store.dataset, progress.value, cfg.secondsPerStep, cfg.headHold, cfg.tailHold);
   const k = Math.round(orderF);
   const next = Math.min(Math.max(k + dir, 0), store.dataset.times.length - 1);
-  // 由目标 orderF 反推 progress
   const seg = (cfg.headHold + next * cfg.secondsPerStep) / Math.max(totalDur.value, 0.001);
   progress.value = Math.min(Math.max(seg, 0), 1);
   renderCurrent();
 }
 
-// 配置变化时重绘当前帧（含时长参数变化后 progress 语义自动跟随）
+// 配置变化时重绘当前帧
 watch(() => [cfg.secondsPerStep, cfg.headHold, cfg.tailHold, cfg.maxBars], () => renderCurrent());
+watch(() => store.dataset, () => renderCurrent());
 
 async function save() {
   await store.saveConfig();
@@ -216,6 +252,7 @@ async function save() {
 
 onMounted(async () => {
   await store.loadProject(projectId.value);
+  valueColumnChoice.value = cfg.valueColumn ?? store.activeValueColumn ?? 'value';
   renderCurrent();
 });
 
@@ -237,6 +274,22 @@ onBeforeUnmount(() => {
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .check-row { display: flex; gap: 16px; font-size: 13px; color: var(--text); }
 .check-row label { display: flex; align-items: center; gap: 6px; }
+.field.slider-field { display: flex; flex-direction: column; gap: 4px; }
+.field.slider-field input[type=range] { width: 100%; }
+.field .hint,
+.slider-field .hint {
+  font-size: 11px;
+  color: var(--sub);
+  line-height: 1.5;
+}
+.hint-box {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--sub);
+  background: var(--bg);
+  border-radius: 6px;
+  line-height: 1.55;
+}
 .duration-info {
   margin-top: 8px; font-size: 13px; color: var(--sub);
   background: var(--bg); padding: 10px 12px; border-radius: 8px; line-height: 1.6;

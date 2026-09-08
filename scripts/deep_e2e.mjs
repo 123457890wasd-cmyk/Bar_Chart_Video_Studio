@@ -86,7 +86,7 @@ const deepSuite = async () => {
   // 列表回读，原始字符串应该完整（不破坏 emoji / 单引号）
   const series = await req('GET', `/projects/${pid}/datasets`);
   assert(series.status === 200, 'series 返回 200');
-  const allEntities = new Set(series.body.data.map(r => r.entity));
+  const allEntities = new Set(series.body.data.series.map(r => r.entity));
   assert(allEntities.has("O'Reilly"), "O'Reilly 单引号实体保留");
   assert(allEntities.has('🚀 火箭'), 'emoji 实体保留');
 
@@ -103,7 +103,7 @@ const deepSuite = async () => {
   const { body: empty } = await req('POST', '/projects', { title: '空数据项目' });
   const emptyId = empty.data.id;
   const rd = await req('GET', `/projects/${emptyId}/datasets`);
-  assert(rd.status === 200 && rd.body.data.length === 0, '空项目 GET /datasets 不报错');
+  assert(rd.status === 200 && (rd.body.data.series?.length ?? rd.body.data.length ?? 0) === 0, '空项目 GET /datasets 不报错');
 
   // ─── 大批量（10000 行 / 50 时间点 / 20 实体 × 50 = 1000 行先测）───
   const big = genRows(50, 2000); // 50 年 × 7 实体 = 350 行
@@ -148,7 +148,7 @@ const deepSuite = async () => {
   const bomR = await req('POST', `/projects/${emptyId}/datasets/import`, { rows: rowsWithBOM });
   // 后端 schema 是 time_key string，无 trim BOM
   const bomGet = await req('GET', `/projects/${emptyId}/datasets`);
-  const hadBOM = bomGet.body.data.some(r => r.time_key.includes('\uFEFF'));
+  const hadBOM = (bomGet.body.data.series ?? bomGet.body.data ?? []).some(r => r.time_key.includes('\uFEFF'));
   if (hadBOM) {
     console.log(`${YEL}ⓘ${RST} ⚠️ \uFEFF BOM 残留在 time_key 中（前端导入时会污染列名猜测）`);
   }

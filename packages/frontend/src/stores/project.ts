@@ -1,6 +1,10 @@
 /**
  * Pinia 项目 store：当前项目 / 时序数据 / 渲染配置草稿
  * 配置即改即生效（草稿暂存，「保存」才落库——方案 §3.2）
+ *
+ * 多值数据：服务端的 GET /datasets 现在返回
+ *   { series: SeriesPoint[], valueColumns: string[], effectiveValueColumn: string }
+ * store 把 SeriesPoint.values[] 和 valueColumn 暴露给 editor / renderer。
  */
 import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
@@ -13,6 +17,10 @@ import { getPalette, makeColorOf, type Palette } from '../renderer/palettes';
 export const useProjectStore = defineStore('project', () => {
   const project = ref<ProjectInfo | null>(null);
   const series = ref<SeriesPoint[]>([]);
+  /** 当前数据集提供的可选"值列"（受 valueColumn 切换影响） */
+  const valueColumns = ref<string[]>(['value']);
+  /** 当前生效的"值列"名 */
+  const activeValueColumn = ref<string>('value');
   const summary = ref<DatasetSummary | null>(null);
   const records = ref<RecordInfo[]>([]);
   const loading = ref(false);
@@ -20,9 +28,32 @@ export const useProjectStore = defineStore('project', () => {
 
   /** 渲染配置草稿（编辑器实时改，保存才写库） */
   const draftConfig = ref<RenderConfig>({ ...DEFAULT_RENDER_CONFIG });
+  /** 当 cfg.valueColumn 与 activeValueColumn 不一致时是否需要持久化 */
   const dirty = ref(false);
 
-  const dataset = computed<Dataset>(() => buildDataset(series.value));
+  /**
+   * dataset 始终用 cfg.valueColumn 的那条值（默认 'value'）。
+   * 后端确保了不论请求哪个 valueColumn，SeriesPoint.values 字典都含所有候选值，
+   * 我们按 cfg.valueColumn 抽取成单一数字列喂给渲染器。
+   */
+  const dataset = computed<Dataset>(() => {
+    const col = draftConfig.value.valueColumn ?? activeValueColumn.value ?? 'value';
+    const rows: { time_key: string; time_order: number; entity: string; value: number }[] =
+      series.value.map(p => {
+        let v: number;
+        if (p.values && Object.prototype.hasOwnProperty.call(p.values, col)) {
+          const raw = p.values[col];
+          v = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+        } else if (col === 'value') {
+          v = p.value;
+        } else {
+          v = 0;
+        }
+        return { time_key: p.time_key, time_order: p.time_order, entity: p.entity, value: v };
+      });
+    return buildDataset(rows);
+  });
+
   const palette = computed<Palette>(() => getPalette(draftConfig.value.palette));
   const colorOf = computed(() => makeColorOf(dataset.value.entities, palette.value));
 
@@ -35,6 +66,12 @@ export const useProjectStore = defineStore('project', () => {
       draftConfig.value = { ...DEFAULT_RENDER_CONFIG, ...project.value.config };
       dirty.value = false;
       await Promise.all([loadSeries(), loadRecords()]);
+      // 把后端给的「当前默认列」回填到 draftConfig.valueColumn
+      const vc = project.value.config.valueColumn;
+      // 真实候选列要从 summary 拿。这里仅用于兜底（多值项目导入时会主动写过 cfg.valueColumn）
+      if (vc && valueColumns.value.includes(vc)) {
+        draftConfig.value = { ...draftConfig.value, valueColumn: vc };
+      }
     } finally {
       loading.value = false;
     }
@@ -42,22 +79,70 @@ export const useProjectStore = defineStore('project', () => {
 
   async function loadSeries() {
     if (!project.value) return;
-    series.value = await api.get<SeriesPoint[]>(`/projects/${project.value.id}/datasets`);
+    const resp = await api.get<{ series: SeriesPoint[]; valueColumns: string[]; effectiveValueColumn: string }>(
+      `/projects/${project.value.id}/datasets${draftConfig.value.valueColumn ? `?valueColumn=${encodeURIComponent(draftConfig.value.valueColumn)}` : ''}`
+    );
+    series.value = resp.series ?? (resp as unknown as SeriesPoint[]);
+    valueColumns.value = resp.valueColumns ?? ['value'];
+    activeValueColumn.value = resp.effectiveValueColumn ?? 'value';
     summary.value = await api.get<DatasetSummary>(`/projects/${project.value.id}/datasets/summary`);
+    // 同步 summary 携带的多值信息
+    if (summary.value) {
+      valueColumns.value = summary.value.valueColumns ?? valueColumns.value;
+      activeValueColumn.value = summary.value.activeValueColumn ?? activeValueColumn.value;
+      // 把 cfg.valueColumn 在首次加载时回填为 summary 推荐的列
+      if (!draftConfig.value.valueColumn) {
+        draftConfig.value = { ...draftConfig.value, valueColumn: activeValueColumn.value };
+      }
+    }
   }
 
   async function loadRecords() {
     records.value = await api.get<RecordInfo[]>(`/records?projectId=${project.value?.id ?? ''}`);
   }
 
+  /** 单值导入 */
   async function importRows(rows: { time_key: string; entity: string; value: number }[]) {
     if (!project.value) return;
     await api.post(`/projects/${project.value.id}/datasets/import`, { rows });
-    // 只刷新数据相关字段，保留 draftConfig（用户的未保存草稿不应被 DB 内容覆盖）
     await loadSeries();
-    // 重新同步 project 元数据（dataset_hash/updated_at 等），但不重置 draftConfig
+    // 单值导入：回到默认值 valueColumn='value'
+    if (draftConfig.value.valueColumn && draftConfig.value.valueColumn !== 'value') {
+      draftConfig.value = { ...draftConfig.value, valueColumn: 'value' };
+      await saveConfig();
+    }
     const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
     project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
+  }
+
+  /** 多值导入 */
+  async function importMultiValue(
+    rows: { time_key: string; entity: string; values: Record<string, number | null> }[],
+    valueColumnsList: string[],
+    defaultValueColumn: string,
+  ) {
+    if (!project.value) return;
+    await api.post(`/projects/${project.value.id}/datasets/import-multi`, {
+      rows,
+      valueColumns: valueColumnsList,
+      defaultValueColumn,
+    });
+    await loadSeries();
+    // 多值导入：把 cfg.valueColumn 切到默认列
+    if (draftConfig.value.valueColumn !== defaultValueColumn) {
+      draftConfig.value = { ...draftConfig.value, valueColumn: defaultValueColumn };
+      await saveConfig();
+    }
+    const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
+    project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
+  }
+
+  /** 用户在编辑界面切换"横坐标值列" → 立即重载 series 即可（其它无需变） */
+  async function switchValueColumn(col: string) {
+    if (!project.value) return;
+    draftConfig.value = { ...draftConfig.value, valueColumn: col };
+    activeValueColumn.value = col;
+    await loadSeries();
   }
 
   async function saveConfig() {
@@ -77,10 +162,12 @@ export const useProjectStore = defineStore('project', () => {
   async function clearData() {
     if (!project.value) return;
     await api.del(`/projects/${project.value.id}/datasets`);
-    // 局部刷新：避免覆盖用户当前未保存的 draftConfig 草稿
     await loadSeries();
     const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
     project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
+    if (draftConfig.value.valueColumn !== 'value') {
+      draftConfig.value = { ...draftConfig.value, valueColumn: 'value' };
+    }
   }
 
   /**
@@ -92,14 +179,17 @@ export const useProjectStore = defineStore('project', () => {
     series.value = [];
     summary.value = null;
     records.value = [];
+    valueColumns.value = ['value'];
+    activeValueColumn.value = 'value';
     draftConfig.value = { ...DEFAULT_RENDER_CONFIG };
     dirty.value = false;
   }
 
   return {
     project, series, summary, records, loading, saving,
+    valueColumns, activeValueColumn,
     draftConfig, dirty, dataset, palette, colorOf,
-    loadProject, loadSeries, loadRecords, importRows, saveConfig, clearData,
-    closeProject,
+    loadProject, loadSeries, loadRecords, importRows, importMultiValue, switchValueColumn,
+    saveConfig, clearData, closeProject,
   };
 });

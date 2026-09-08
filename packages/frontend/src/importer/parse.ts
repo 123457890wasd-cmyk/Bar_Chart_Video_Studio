@@ -16,12 +16,23 @@ export interface ColumnMapping {
   time: string;
   entity: string;
   value: string;
+  /** 多值列候选（用户可在导入时/编辑时从这些列里挑横坐标） */
+  valueCandidates?: string[];
 }
 
 export type TableMode = 'long' | 'wide-by-row' | 'wide-by-col';
 // long:        每行 = (time, entity, value)
 // wide-by-row: 第一列 = 时间，其余各列 = 实体（政府 CSV 常见）
 // wide-by-col: 第一列 = 实体，其余各列 = 时间
+
+/** xlsx 解析结果：可能含多 sheet，给前端让用户选择 */
+export interface ParsedXlsxResult {
+  sheetNames: string[];
+  /** 当前预览的 sheet（默认第 1 个数据 sheet） */
+  sheetName: string;
+  fields: string[];
+  rows: string[][];
+}
 
 /** 文本解码：BOM 剥离 → UTF-8 严格 → GBK → 兜底替换（方案 §9） */
 export async function decodeFile(file: File): Promise<string> {
@@ -42,6 +53,41 @@ export async function decodeFile(file: File): Promise<string> {
 /** 去掉开头 BOM 字符（UTF-8 \uFEFF / UTF-16 LE / BE 等） */
 export function stripBOM(text: string): string {
   return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
+/** 把 sheet 内二维数组 → ParsedTable（供通用路径使用） */
+function aoaToTable(aoa: unknown[][]): ParsedTable {
+  const trimmed = aoa.map(r => r.map(c => String(c ?? '').trim()));
+  const fields = (trimmed.shift() ?? []).map((f, i) => (f ? f : `列${i + 1}`));
+  return { fields, rows: trimmed, source: 'xlsx' };
+}
+
+/** 读取 xlsx：返回所有 sheet 名称 + 默认第 1 个 sheet 的数据 */
+export async function readXlsxSheets(file: File): Promise<ParsedXlsxResult> {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  if (wb.SheetNames.length === 0) {
+    return { sheetNames: [], sheetName: '', fields: [], rows: [] };
+  }
+  // 选第一个"像数据表"的 sheet：要求至少 1 行 1 列；首 sheet 通常就是
+  let pick = wb.SheetNames[0];
+  for (const sn of wb.SheetNames) {
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, defval: '' });
+    if (aoa.length >= 2) { pick = sn; break; }
+  }
+  const sheet = wb.Sheets[pick];
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false, defval: '' });
+  const table = aoaToTable(aoa);
+  return { sheetNames: wb.SheetNames, sheetName: pick, fields: table.fields, rows: table.rows };
+}
+
+/** 给定 xlsx 文件 + sheet 名，返回该 sheet 的 ParsedTable（用于"切换 sheet 预览"） */
+export async function readXlsxSheet(file: File, sheetName: string): Promise<ParsedTable> {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  if (!wb.Sheets[sheetName]) throw new Error(`Sheet 不存在: ${sheetName}`);
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, blankrows: false, defval: '' });
+  return aoaToTable(aoa);
 }
 
 export function parseDelimitedText(text: string): ParsedTable {
@@ -79,14 +125,9 @@ export function parseCsvFile(text: string): ParsedTable {
 }
 
 export async function parseXlsxFile(file: File): Promise<ParsedTable> {
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: 'array' });
-  const sheetName = wb.SheetNames[0];
-  const sheet = wb.Sheets[sheetName];
-  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false, defval: '' });
-  const rows = aoa.map(r => r.map(c => String(c ?? '').trim()));
-  const fields = (rows.shift() ?? []).map((f, i) => (f ? f : `列${i + 1}`));
-  return { fields, rows, source: 'xlsx' };
+  // 兼容旧接口：等同 readXlsxSheets().table
+  const r = await readXlsxSheets(file);
+  return { fields: r.fields, rows: r.rows, source: 'xlsx' };
 }
 
 export async function parseFile(file: File): Promise<ParsedTable> {
@@ -94,7 +135,6 @@ export async function parseFile(file: File): Promise<ParsedTable> {
   if (name.endsWith('.xlsx') || name.endsWith('.xls')) return parseXlsxFile(file);
   const text = await decodeFile(file);
   if (name.endsWith('.json')) {
-    // JSON 长表 [{time, entity, value}]
     try {
       const arr = JSON.parse(text);
       const rows = Array.isArray(arr) ? arr : [];
@@ -133,7 +173,20 @@ export function guessMapping(table: ParsedTable): ColumnMapping | null {
     entity = fields[1];
     value = fields[valueIdx];
   }
-  return { time, entity, value };
+
+  // 候选"值列"：除时间/实体列外，其它可解析为数值的列都是候选
+  const numericCols = fields.filter(f =>
+    f !== time && f !== entity && numericRatioOfColumn(rows, fields.indexOf(f)) > 0.4
+  );
+  return { time: time!, entity: entity!, value: value!, valueCandidates: numericCols.length ? numericCols : undefined };
+}
+
+function numericRatioOfColumn(rows: string[][], ci: number): number {
+  if (!rows.length) return 0;
+  const nonEmpty = rows.filter(r => (r[ci] ?? '') !== '');
+  if (!nonEmpty.length) return 0;
+  const numeric = nonEmpty.filter(r => Number.isFinite(Number((r[ci] ?? '').replace(/[,，\s%¥$]/g, ''))));
+  return numeric.length / nonEmpty.length;
 }
 
 export interface ToLongResult {
@@ -175,7 +228,6 @@ export function toLongRows(
       out.push({ time_key: t, entity: e, value: v });
     }
   } else if (mode === 'wide-by-row') {
-    // 第一列 = 时间，其余列 = 实体
     for (const r of rows) {
       const t = (r[0] ?? '').trim();
       if (!t) { warnings.push('存在空时间行，已跳过'); continue; }
@@ -190,7 +242,7 @@ export function toLongRows(
       }
     }
   } else {
-    // wide-by-col：第一列 = 实体，其余列 = 时间
+    // wide-by-col
     for (const r of rows) {
       const e = (r[0] ?? '').trim();
       if (!e) { warnings.push('存在空实体行，已跳过'); continue; }
@@ -209,4 +261,93 @@ export function toLongRows(
   if (out.length === 0) errors.push('没有解析出有效数据行，请检查列映射或表格模式');
   const uniqWarnings = [...new Set(warnings)];
   return { rows: out, errors, warnings: uniqWarnings.slice(0, 20) };
+}
+
+/**
+ * 多值长表转换：当用户在宽表中携带多个"值"列（如「人均 GDP」「人均消费支出」并存于同一行）
+ * 或长表中一行的多个数值列都需要保留时使用。
+ *
+ * 输入：
+ *   - long 模式 + 多个值列 → 每个 (time, entity) 行展开成多个记录，分别有 values 字典
+ *   - long 模式 + 单值列  → 等同 toLongRows，但保留 multi 形态
+ *   - wide-by-row 模式    → 每行 = (time, e1, e2, ...)。若多个数值列被指定，转 multi
+ */
+export function toMultiValueRows(
+  table: ParsedTable,
+  mode: TableMode,
+  mapping?: ColumnMapping,
+): {
+  rows: { time_key: string; entity: string; values: Record<string, number | null> }[];
+  valueColumns: string[];
+  errors: string[];
+  warnings: string[];
+} {
+  const { fields, rows } = table;
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!mapping) {
+    return { rows: [], valueColumns: [], errors: ['缺少列映射'], warnings };
+  }
+
+  const toNumber = (raw: string): number | null => {
+    const cleaned = raw.replace(/[,，\s%¥$]/g, '');
+    if (cleaned === '' || cleaned === '-' || cleaned === '—') return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const out: { time_key: string; entity: string; values: Record<string, number | null> }[] = [];
+
+  if (mode === 'long') {
+    const ti = fields.indexOf(mapping.time);
+    const ei = fields.indexOf(mapping.entity);
+    const candidates = mapping.valueCandidates?.length
+      ? mapping.valueCandidates
+      : [mapping.value];
+    const vis = candidates
+      .map(c => ({ col: c, idx: fields.indexOf(c) }))
+      .filter(o => o.idx >= 0);
+    if (ti < 0 || ei < 0 || vis.length === 0) {
+      return { rows: [], valueColumns: [], errors: ['列映射无效'], warnings };
+    }
+    for (const r of rows) {
+      const t = (r[ti] ?? '').trim();
+      const e = (r[ei] ?? '').trim();
+      if (!t || !e) { warnings.push(`空时间/实体行已跳过`); continue; }
+      const values: Record<string, number | null> = {};
+      for (const v of vis) values[v.col] = toNumber(r[v.idx] ?? '');
+      out.push({ time_key: t, entity: e, values });
+    }
+  } else if (mode === 'wide-by-row') {
+    // 行=时间；列=实体。但若用户从 valueCandidates 里挑了多个列当 multi-value，则每个候选列都成为该行的实体 ?? 这种语义不顺：
+    // wide-by-row 的 natural meaning 是 "每列一个实体"。多值时只取主值列（mapping.value 这条），其它候选列忽略。
+    const ti = 0;
+    for (const r of rows) {
+      const t = (r[ti] ?? '').trim();
+      if (!t) { warnings.push('存在空时间行，已跳过'); continue; }
+      for (let j = 1; j < fields.length; j++) {
+        const e = fields[j];
+        const v = toNumber(r[j] ?? '');
+        if (v === null) continue;
+        out.push({ time_key: t, entity: e, values: { [mapping.value]: v } });
+      }
+    }
+  } else {
+    // wide-by-col
+    for (const r of rows) {
+      const e = (r[0] ?? '').trim();
+      if (!e) continue;
+      for (let j = 1; j < fields.length; j++) {
+        const t = fields[j];
+        const v = toNumber(r[j] ?? '');
+        if (v === null) continue;
+        out.push({ time_key: t, entity: e, values: { [mapping.value]: v } });
+      }
+    }
+  }
+
+  const cols = mapping.valueCandidates?.length ? mapping.valueCandidates : [mapping.value];
+  if (out.length === 0) errors.push('没有解析出有效数据行');
+  return { rows: out, valueColumns: cols, errors, warnings: [...new Set(warnings)].slice(0, 20) };
 }

@@ -22,9 +22,10 @@ export const renderConfigSchema = z.object({
   height: z.number().int().min(360).max(3840).default(1080),
   fps: z.number().int().min(10).max(60).default(30),
   videoBitsPerSecond: z.number().int().min(1_000_000).max(40_000_000).default(8_000_000),
+  valueColumn: z.string().max(64).optional(),
 });
 
-/** 长表导入 payload —— value 允许多种形态（由后端 importService 统一清洗为 number，符合方案 §9 缺失/异常值策略） */
+/** 长表单值导入 payload —— value 允许多种形态（由后端 importService 统一清洗为 number，符合方案 §9 缺失/异常值策略） */
 export const importPayloadSchema = z.object({
   rows: z.array(z.object({
     time_key: z.string().max(64),
@@ -33,6 +34,21 @@ export const importPayloadSchema = z.object({
     value: z.unknown(),
   })).min(1),
   /** 是否补 0：实体在某时间点缺失时 */
+  fillMissingWithZero: z.boolean().default(true),
+});
+
+/** 长表多值导入 payload —— 同一行承载多个数值列（如 原始 / 插值 / 填补） */
+export const importMultiValuePayloadSchema = z.object({
+  rows: z.array(z.object({
+    time_key: z.string().max(64),
+    entity: z.string().max(200),
+    // 值列名 → 数值 / null；后端统一 Number() 清洗，缺/脏值变 null
+    values: z.record(z.string().max(64), z.unknown()),
+  })).min(1),
+  /** 该批数据携带的"值列"名清单，必须按表头固定顺序 */
+  valueColumns: z.array(z.string().min(1).max(64)).min(1),
+  /** 默认显示哪一列（可选，未提供时 = valueColumns[0]） */
+  defaultValueColumn: z.string().max(64).optional(),
   fillMissingWithZero: z.boolean().default(true),
 });
 

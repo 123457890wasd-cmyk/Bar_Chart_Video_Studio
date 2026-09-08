@@ -34,7 +34,8 @@ assert(r1.status === 201 && r1.body.data.imported === 2, 'BOM 污染的 time_key
 
 const get1 = await req('GET', `/projects/${pid}/datasets`);
 assert(get1.status === 200, '读回 OK');
-const hasBom = get1.body.data.some(r =>
+const rows1 = get1.body.data.series ?? get1.body.data;
+const hasBom = Array.isArray(rows1) && rows1.some(r =>
   r.time_key.includes('\uFEFF') || r.entity.includes('\uFEFF')
 );
 assert(!hasBom, '读回数据不含 BOM 残留', hasBom ? '仍含 \uFEFF' : '');
@@ -53,8 +54,8 @@ assert(r2.body.data && r2.body.data.imported === 1, '前后空格被 trim',
   `imported=${r2.body.data?.imported}, skipped=${r2.body.data?.skipped}, err=${r2.body.error?.message}`);
 
 const get2 = await req('GET', `/projects/${pid}/datasets`);
-const last = get2.body.data[0];
-assert(last.time_key === '2025' && last.entity === '实体',
+const last = (get2.body.data.series ?? get2.body.data)[0];
+assert(last && last.time_key === '2025' && last.entity === '实体',
   `time_key='${last.time_key}', entity='${last.entity}'`);
 
 // 清理

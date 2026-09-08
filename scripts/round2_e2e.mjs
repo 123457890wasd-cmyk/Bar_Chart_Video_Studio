@@ -58,7 +58,7 @@ const suite = async () => {
     ],
   });
   assert(r2.body.data.imported === 3, '同值并列：3 行入库');
-  const s2 = (await req('GET', `/projects/${pidA}/datasets`)).body.data;
+  const s2 = (await req('GET', `/projects/${pidA}/datasets`)).body.data.series;
   // ORDER BY time_order, value DESC, entity ASC → 同值时 entity 字典序：B(eta) < G(amma) < A(lpha)
   // 即 order: Beta, Gamma, Alpha
   const sameTimes = s2.filter(r => r.time_key === '2025');
@@ -75,7 +75,7 @@ const suite = async () => {
       { time_key: 'Q2', entity: 'X', value: 2 },
     ],
   });
-  const s3 = (await req('GET', `/projects/${pidA}/datasets`)).body.data.filter(r => r.entity === 'X' && ['Q1','Q2','Q3'].includes(r.time_key));
+  const s3 = (await req('GET', `/projects/${pidA}/datasets`)).body.data.series.filter(r => r.entity === 'X' && ['Q1','Q2','Q3'].includes(r.time_key));
   const orders = s3.map(r => `${r.time_key}=${r.time_order}`).join(',');
   assert(orders === 'Q1=0,Q3=1,Q2=2',
     '非数值 time_key 保持首现顺序', orders);
@@ -92,7 +92,7 @@ const suite = async () => {
   // better-sqlite3 是同步的，better-sqlite3 内部跑在同步 fs 上，外层 JS 同一线程。
   // 即使 Node.js 接 Promise.all 也只是排队 invoke，不会真同步。
   // 实际最终落到 DB 的内容应等价（DELETE + INSERT），重复写入。
-  const sB = (await req('GET', `/projects/${pidB}/datasets`)).body.data;
+  const sB = (await req('GET', `/projects/${pidB}/datasets`)).body.data.series;
   assert(sB.length === 100, '并发 import 后数据完整（5×20=100 行）',
     `actual=${sB.length}`);
 

@@ -3,19 +3,34 @@
  * 对应技术方案 §4.4 / §5.2
  */
 
-/** 长表一行：(时间, 实体, 数值) */
+/** 长表一行：(时间, 实体, 数值) —— 单值模式 */
 export interface TimeSeriesRow {
   time_key: string;
   entity: string;
   value: number;
 }
 
-/** 时序数据取回形态（已按 time_order 排序） */
+/**
+ * 长表一行（多值模式）：一行的实体在多个"值列"上各有数值（如 原始/插值/填补）。
+ * columns 为可用值列名清单，editor 端通过 RenderConfig.valueColumn 选择用哪一列。
+ */
+export interface TimeSeriesMultiValueRow {
+  time_key: string;
+  entity: string;
+  /** 多值列名 → 数值（缺失为 null，归 0 处理） */
+  values: Record<string, number | null>;
+}
+
+/** 时序数据取回形态（已按 time_order 排序）。
+ *  value 为当前选中列对应的值（由后端根据 project.config.valueColumn 解析）；
+ *  values 仅当数据为多值导入时携带（可空）；entities 在 summary 中提供可选值列清单。 */
 export interface SeriesPoint {
   time_key: string;
   time_order: number;
   entity: string;
   value: number;
+  /** 多值时的全部可选值（只在 valueColumns.length > 1 时存在） */
+  values?: Record<string, number | null>;
 }
 
 /** 数据集元信息 */
@@ -26,6 +41,12 @@ export interface DatasetSummary {
   timeMin: string | null;
   timeMax: string | null;
   missingValues: number;
+  /** 该数据集可选的"值列"清单：
+   *  - 单值导入时 = ['value']
+   *  - 多值导入时 = 导入时携带的所有数值列名（如 ['原始','插值','填补']） */
+  valueColumns: string[];
+  /** 当前默认选中的值列名（落地在 project.config.valueColumn） */
+  activeValueColumn: string;
 }
 
 /** 渲染配置（存 projects.config 的 JSON 结构） */
@@ -56,6 +77,9 @@ export interface RenderConfig {
   fontScale: number;
   /** 背景色 */
   background: string;
+  /** 横坐标（条长）所使用的数据列名；多值导入时由用户在编辑器切换。
+   *  默认 'value'，向后兼容未启用多值的项目。 */
+  valueColumn?: string;
   /** 导出分辨率 */
   width: number;
   height: number;

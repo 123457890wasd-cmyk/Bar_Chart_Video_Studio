@@ -1,6 +1,8 @@
 /**
  * SQLite 初始化与 DDL —— 严格对应技术方案 §4.4
  * 单机单用户定稿：SQLite 即最终数据库；DDL 按可移植口径书写。
+ *
+ * 含 schema 迁移（additive only），所以旧 DB 自动兼容到 v2（多值数据集）。
  */
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
@@ -38,9 +40,16 @@ CREATE TABLE IF NOT EXISTS time_series (
   time_order  INTEGER NOT NULL,
   entity      TEXT    NOT NULL,
   value       REAL    NOT NULL,
+  values_json TEXT,
   UNIQUE (project_id, time_order, entity)
 );
 CREATE INDEX IF NOT EXISTS idx_ts_project ON time_series(project_id, time_order);
+
+CREATE TABLE IF NOT EXISTS datasets_meta (
+  project_id     INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  value_columns  TEXT    NOT NULL DEFAULT '["value"]',
+  default_value_column TEXT NOT NULL DEFAULT 'value'
+);
 
 CREATE TABLE IF NOT EXISTS entities (
   id          INTEGER PRIMARY KEY,
@@ -73,6 +82,33 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
   request TEXT, response TEXT, status TEXT DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+`);
+
+/**
+ * 兼容迁移：旧版 time_series 没有 values_json / datasets_meta。
+ * 增量 ALTER TABLE 幂等执行（IF NOT EXISTS 不能用于 ADD COLUMN，这里查 pragma_column_info 决定）。
+ */
+function ensureColumn(table: string, col: string, decl: string) {
+  const cols = db.pragma(`table_info(${table})`) as { name: string }[];
+  if (!cols.some(c => c.name === col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+  }
+}
+
+function ensureTable(name: string, ddl: string) {
+  const exists = (db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+  ).get(name) as { name: string } | undefined);
+  if (!exists) db.exec(ddl);
+}
+
+ensureColumn('time_series', 'values_json', 'TEXT');
+ensureTable('datasets_meta', `
+  CREATE TABLE datasets_meta (
+    project_id     INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    value_columns  TEXT    NOT NULL DEFAULT '["value"]',
+    default_value_column TEXT NOT NULL DEFAULT 'value'
+  )
 `);
 
 /** 内容哈希（幂等导入比对用） */
