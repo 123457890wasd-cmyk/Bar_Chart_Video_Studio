@@ -80,6 +80,11 @@ export interface RenderConfig {
   /** 横坐标（条长）所使用的数据列名；多值导入时由用户在编辑器切换。
    *  默认 'value'，向后兼容未启用多值的项目。 */
   valueColumn?: string;
+  /** 顶部数轴步幅（控制刻度间距）。
+   *  - 未设置 / 0：自动 nice step（数据集 maxAbs 适配 1/2/5 幂倍数，3..7 个刻度）
+   *  - 设置正数（如 1000）：scaleMax = ceil(maxAbs / step) × step，刻度永远按该步幅等分
+   *  （如 0/1000/2000/...）；适用于需要"大步整数""避免密集小数"的场景 */
+  axisStep?: number;
   /** 导出分辨率 */
   width: number;
   height: number;

@@ -4,6 +4,12 @@
  * 抖动规避的本质（方案原文）：
  * 「长度插值」产生平滑增长，而「Y 由插值后的值实时排序决定」；
  * 条数变化瞬间的整组跳变，靠"相邻两步取并集 + 0 值补位"解决。
+ *
+ * 排名位置平滑（§6.1 增强）：
+ * 每个 BarState 同时携带 prevRank / nextRank（前 / 后两步在各自 top-N 中的位置）
+ * 和 opacity（入场淡入 / 出场淡出）。引擎层按 (progress) 在 prev→next 上做线性插值，
+ * 当两个实体在两步之间发生排名反转、跨多位的进/出时，画面表现为"互相穿过"而不是
+ * "瞬间跳位"，观感更柔顺。
  */
 import type { SeriesPoint } from '@barstudio/shared';
 
@@ -21,12 +27,25 @@ export interface Dataset {
   entities: string[];
   /** 全部 time_key 是否均为数值（决定 continuous 时间标签可用性） */
   numericTimes: boolean;
+  /** 整个数据集所有 value 的最大绝对值（用于按 axisStep 算全局比例尺，避免刻度跳动） */
+  maxAbs: number;
 }
 
 export interface BarState {
   entity: string;
   value: number;
+  /** 显示用的 rank（按当前帧插值后值在并集中降序，1-based） */
   rank: number;
+  /** 该实体在「前一步」top-N 中的位置；不在榜时 = maxBars + 1（虚拟榜外位置） */
+  prevRank: number;
+  /** 该实体在「后一步」top-N 中的位置；不在榜时 = maxBars + 1 */
+  nextRank: number;
+  /** 综合淡入淡出后的不透明度（0..1）：
+   *  - 仅入场（prev 不在榜）→ opacity = t（线性从 0 增到 1）
+   *  - 仅出场（next 不在榜）→ opacity = 1 - t（线性从 1 减到 0）
+   *  - 同时进出（不可能；union 取并集保证至少一端在榜） → min(t, 1 - t)
+   *  - 普通 → 1 */
+  opacity: number;
 }
 
 export interface InterpFrame {
@@ -35,6 +54,8 @@ export interface InterpFrame {
   /** 数值插值标签（continuous 模式用；时间点非数值时为 null） */
   timeLabelCont: string | null;
   bars: BarState[];
+  /** 当前帧在「两端」之间的已缓动进度（0..1），供引擎复用避免重复计算 */
+  progress: number;
 }
 
 export function buildDataset(points: SeriesPoint[]): Dataset {
@@ -42,14 +63,17 @@ export function buildDataset(points: SeriesPoint[]): Dataset {
   const times = new Map<number, string>();
   const entities: string[] = [];
   const entitySet = new Set<string>();
-  const numericKeys: string[] = [];
+  let maxAbs = 0;
 
   for (const p of points) {
     if (!times.has(p.time_order)) times.set(p.time_order, p.time_key);
     if (!values.has(p.time_order)) values.set(p.time_order, new Map());
     values.get(p.time_order)!.set(p.entity, p.value);
     if (!entitySet.has(p.entity)) { entitySet.add(p.entity); entities.push(p.entity); }
-    numericKeys.push(p.time_key);
+    if (Number.isFinite(p.value)) {
+      const av = Math.abs(p.value);
+      if (av > maxAbs) maxAbs = av;
+    }
   }
 
   const timeList = [...times.entries()]
@@ -58,7 +82,7 @@ export function buildDataset(points: SeriesPoint[]): Dataset {
 
   const numericTimes = timeList.length > 0 && timeList.every(t => Number.isFinite(Number(t.label)));
 
-  return { times: timeList, values, entities, numericTimes };
+  return { times: timeList, values, entities, numericTimes, maxAbs };
 }
 
 /** 温和缓动：多步连播时平滑、单步内略有节奏（easeInOutSine） */
@@ -77,23 +101,31 @@ export function timeCount(ds: Dataset): number {
 
 /**
  * 求任意（可为小数的）orderF 处的帧。
- * - k = floor(orderF)，t = orderF - k（eased）
- * - 并集 = A、B 两端各自 top maxBars 的实体集合（含"即将上榜"与"即将跌出"）
- * - 每实体 value = lerp(vA, vB, ease(t))，缺失端按 0 补位
- * - 当前帧排名 = 并集按当前值降序（并列按实体名字典序稳定）
- * - 绘制条数 = 前 maxBars 名
+ * - k = floor(orderF)，t = orderF - k（步内原始进度 0..1），eased = ease(t)
+ * - prevRank/nextRank：前/后两端各自 top-N 中的位置（不在榜时 = maxBars + 1）
+ * - value = lerp(vA, vB, eased)，缺失端按 0 补位
+ * - opacity：入场时 t 淡入、出场时 1-t 淡出，否则 1
+ * - 显示 rank = 按 union 当前值降序后的 i + 1（用于文本；位置由 prev/next 插值决定）
+ * - 绘制条数 = 取前 maxBars 名
  */
 export function interpolate(ds: Dataset, orderF: number, maxBars: number): InterpFrame {
   const N = ds.times.length;
-  if (N === 0) return { timeLabel: '', timeLabelCont: null, bars: [] };
+  if (N === 0) return { timeLabel: '', timeLabelCont: null, bars: [], progress: 0 };
   if (N === 1) {
     const m = ds.values.get(ds.times[0].order)!;
     const bars = [...m.entries()]
-      .map(([entity, value]) => ({ entity, value, rank: 0 }))
+      .map(([entity, value]) => ({
+        entity,
+        value,
+        rank: 0,
+        prevRank: maxBars + 1,
+        nextRank: maxBars + 1,
+        opacity: 1,
+      }))
       .sort((a, b) => b.value - a.value || a.entity.localeCompare(b.entity, 'zh'))
       .slice(0, maxBars)
       .map((b, i) => ({ ...b, rank: i + 1 }));
-    return { timeLabel: ds.times[0].label, timeLabelCont: null, bars };
+    return { timeLabel: ds.times[0].label, timeLabelCont: null, bars, progress: 0 };
   }
 
   const k = Math.min(Math.max(Math.floor(orderF), 0), N - 2);
@@ -103,27 +135,63 @@ export function interpolate(ds: Dataset, orderF: number, maxBars: number): Inter
   const mapA = ds.values.get(ds.times[k].order)!;
   const mapB = ds.values.get(ds.times[k + 1].order)!;
 
-  const topOf = (m: Map<string, number>) =>
+  const rankedOf = (m: Map<string, number>): string[] =>
     [...m.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'))
       .slice(0, maxBars)
       .map(([e]) => e);
 
-  const union = new Set<string>([...topOf(mapA), ...topOf(mapB)]);
+  const rankedA = rankedOf(mapA);
+  const rankedB = rankedOf(mapB);
+  const union: string[] = [];
+  const unionSet = new Set<string>();
+  for (const e of rankedA) {
+    if (!unionSet.has(e)) { unionSet.add(e); union.push(e); }
+  }
+  for (const e of rankedB) {
+    if (!unionSet.has(e)) { unionSet.add(e); union.push(e); }
+  }
+
+  const OFF = maxBars + 1; // 虚拟"榜外"位置（用于入场 / 出场滑入滑出）
+
+  // prev/next rank 快速查找（O(1) per entity）
+  const rankOf = (arr: string[], e: string): number => {
+    const i = arr.indexOf(e);
+    return i >= 0 ? i + 1 : OFF;
+  };
 
   const bars: BarState[] = [];
   for (const entity of union) {
     const vA = mapA.get(entity) ?? 0;
     const vB = mapB.get(entity) ?? 0;
-    bars.push({ entity, value: lerp(vA, vB, eased), rank: 0 });
+    const prevRank = rankOf(rankedA, entity);
+    const nextRank = rankOf(rankedB, entity);
+
+    // opacity：入场用 t（线性淡入到 1）、出场用 1 - t（线性淡出）。两端任一在榜内另一端在榜外时互斥生效。
+    let opacity = 1;
+    if (prevRank === OFF && nextRank !== OFF) {
+      opacity = t; // 新晋
+    } else if (nextRank === OFF && prevRank !== OFF) {
+      opacity = 1 - t; // 离场
+    } else if (prevRank === OFF && nextRank === OFF) {
+      // 理论上 union 取并集保证至少一端在榜，不会发生；防御性归 0
+      opacity = 0;
+    }
+
+    bars.push({
+      entity,
+      value: lerp(vA, vB, eased),
+      rank: 0,
+      prevRank,
+      nextRank,
+      opacity,
+    });
   }
   bars.sort((a, b) => b.value - a.value || a.entity.localeCompare(b.entity, 'zh'));
   const shown = bars.slice(0, maxBars);
   shown.forEach((b, i) => { b.rank = i + 1; });
 
   // 时间标签（方案 §6.2）：
-  // timeLabel = 当前步标签（step 模式，过渡中点切换，兼顾观感与「切步时刷新」原则）
-  // timeLabelCont = 数值插值保留一位小数（continuous 模式，仅数值时间点可用）
   let timeLabel: string;
   let timeLabelCont: string | null = null;
   if (ds.numericTimes) {
@@ -134,7 +202,7 @@ export function interpolate(ds: Dataset, orderF: number, maxBars: number): Inter
   } else {
     timeLabel = t >= 0.5 ? ds.times[k + 1].label : ds.times[k].label;
   }
-  return { timeLabel, timeLabelCont, bars: shown };
+  return { timeLabel, timeLabelCont, bars: shown, progress: eased };
 }
 
 /** 总时长（秒）：headHold + (N-1)*secondsPerStep + tailHold（方案 §6.2） */
@@ -155,4 +223,49 @@ export function progressToOrderF(ds: Dataset, p: number, secondsPerStep: number,
   if (elapsed <= segStart) return 0;
   if (elapsed >= segStart + segLen) return N - 1;
   return (elapsed - segStart) / secondsPerStep;
+}
+
+/**
+ * 计算"漂亮"的刻度步幅 — 当 axisStep 为 auto 时（即未指定或 ≤ 0）使用。
+ * 目标：总刻度数控制在 3..7 之间；取整到 1 / 2 / 5 × 10^k 的形式。
+ *  - 算出 rawStep ≈ maxAbs / 5
+ *  - 选最接近 rawStep 的 1 / 2 / 5 幂倍数，作为 niceStep
+ *  - 返回 niceStep；同时 ticks = ceil(maxAbs / niceStep)（最少 3）
+ */
+export function niceStepFromMax(maxAbs: number, targetTicks = 5): number {
+  if (!Number.isFinite(maxAbs) || maxAbs <= 0) return 1;
+  const raw = maxAbs / Math.max(targetTicks, 1);
+  // 1 / 2 / 5 系数
+  const exp = Math.floor(Math.log10(raw));
+  const base = Math.pow(10, exp);
+  const ratio = raw / base; // ∈ [1, 10)
+  let coef = 1;
+  if (ratio >= 5) coef = 5;
+  else if (ratio >= 2) coef = 2;
+  return coef * base;
+}
+
+/**
+ * 根据 axisStep 与全局 maxAbs 计算最终 scaleMax 与可见 ticks 列表。
+ * - axisStep <= 0：自动 nice step，scaleMax = maxAbs × 1.05，ticks 沿用 niceStep 等分
+ * - axisStep > 0：scaleMax = ceil(maxAbs / axisStep) × axisStep；ticks = 0..ceil(...)
+ *
+ * 返回 { scaleMax, ticks: number[] }；ticks 至少含 0。
+ */
+export interface ScaleResult { scaleMax: number; ticks: number[]; step: number; }
+export function computeScale(maxAbs: number, axisStep: number | undefined, targetTicks = 5): ScaleResult {
+  const m = Number.isFinite(maxAbs) && maxAbs > 0 ? maxAbs : 1;
+  let step: number;
+  if (axisStep && axisStep > 0) {
+    step = axisStep;
+  } else {
+    step = niceStepFromMax(m, targetTicks);
+  }
+  const scaleMax = axisStep && axisStep > 0
+    ? Math.ceil(m / step) * step
+    : m * 1.05; // 自动模式沿用旧行为（保证头名接近满宽）
+  const ticksCount = Math.max(3, Math.min(8, Math.ceil(scaleMax / step)));
+  const ticks: number[] = [];
+  for (let i = 0; i <= ticksCount; i++) ticks.push(Math.round((scaleMax / ticksCount) * i * 1e6) / 1e6);
+  return { scaleMax, ticks, step };
 }

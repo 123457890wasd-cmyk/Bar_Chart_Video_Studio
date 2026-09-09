@@ -43,6 +43,7 @@ function paint(orderF: number) {
     config: props.config,
     palette: props.palette,
     colorOf: props.colorOf,
+    dataset: props.dataset,
     labelWidth: labelWidth.value || undefined,
   }, ctx);
 }

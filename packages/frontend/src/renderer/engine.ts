@@ -7,9 +7,17 @@
  *
  * 绘制顺序（每帧）：清背景 → 网格/轴线 → 条形（圆角矩形、实体标签、末端数值）
  *                → 标题/角标 → 时间大标签（半透明大字，压在条形区一角）
+ *
+ * 排名位置插值（增强）：
+ * 每帧根据 bar.prevRank / bar.nextRank（前后帧排名位置）+ frame.progress
+ * 做 y 位置线性插值。同一帧内 bar 颜色 / 长度仍按插值后的 value 绘；
+ * 透明度由 bar.opacity 控制（入场淡入 / 出场淡出）。结果：
+ *  - 两个 bar 反超时表现为"互相穿过"而非"瞬间跳位"
+ *  - 新晋实体从底部滑入并淡入，跌出实体向下滑出并淡出
  */
 import type { RenderConfig } from '@barstudio/shared';
-import type { InterpFrame } from './frames';
+import type { Dataset, InterpFrame } from './frames';
+import { computeScale, lerp } from './frames';
 import type { Palette } from './palettes';
 
 export interface DrawOptions {
@@ -18,6 +26,8 @@ export interface DrawOptions {
   config: RenderConfig;
   palette: Palette;
   colorOf: (entity: string) => string;
+  /** 数据集（用于 axisStep 全局数轴）；可选，向后兼容 */
+  dataset?: Dataset;
   /**
    * 预算的实体名标签区宽度（像素，1080p 基准）。由外层（BarChartCanvas）按 dataset.entities
    * 全集预算后传入，以保证排名变化时实体名区域不抖动——避免每帧 measureText 重算
@@ -64,6 +74,7 @@ export class BarRaceRenderer {
     const { width: W, height: H, config, palette, colorOf } = opts;
     const s = W / 1920; // 等比缩放基准：以宽度为基准（横竖屏通吃）
     const fs = config.fontScale;
+    const progress = frame.progress; // 0..1，已 eased
 
     // ---- 背景 ----
     ctx.fillStyle = config.background || palette.background;
@@ -87,17 +98,26 @@ export class BarRaceRenderer {
     const valueSpace = config.showValues ? 190 * s : 40 * s;
     const plotW = Math.max(W - plotLeft - padX - valueSpace, 40 * s);
 
-    const maxBars = frame.bars.length;
+    const maxBars = frame.bars.length || config.maxBars;
     const rowH = plotH / Math.max(maxBars, 1);
     const barH = Math.min(rowH * 0.72, 90 * s);
     const x0 = plotLeft;
     const x1 = plotLeft + plotW;
 
-    // ---- 比例尺：当前帧最大绝对值 × 1.05（bar race 惯例：头名恒接近满宽）----
-    // 用 max(|value|) 以支持正负混合场景，避免全负数据时 scaleMax 为负致绘制反向
-    let maxVal = 0;
-    for (const b of frame.bars) maxVal = Math.max(maxVal, Math.abs(b.value));
-    const scaleMax = maxVal > 0 ? maxVal * 1.05 : 1;
+    // ---- 比例尺：用户指定 axisStep 时取全局 maxAbs，按 step 向上取整到 nice 倍数；
+    //      auto 时退回每帧 max(|value|) × 1.05，向后兼容 ----
+    const scale = opts.dataset
+      ? computeScale(opts.dataset.maxAbs, config.axisStep)
+      : (() => {
+          let m = 0;
+          for (const b of frame.bars) m = Math.max(m, Math.abs(b.value));
+          const sm = m > 0 ? m * 1.05 : 1;
+          const ticks: number[] = [];
+          for (let i = 0; i <= 5; i++) ticks.push((sm / 5) * i);
+          return { scaleMax: sm, ticks, step: sm / 5 };
+        })();
+    const scaleMax = scale.scaleMax;
+    const ticks = scale.ticks;
     const xOf = (v: number) => x0 + (Math.max(v, 0) / scaleMax) * plotW;
 
     // ---- 网格 + 轴刻度 ----
@@ -106,9 +126,8 @@ export class BarRaceRenderer {
     ctx.fillStyle = palette.subText;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    const ticks = 5;
-    for (let i = 0; i <= ticks; i++) {
-      const v = (scaleMax / ticks) * i;
+    for (let i = 0; i < ticks.length; i++) {
+      const v = ticks[i];
       const x = xOf(v);
       ctx.strokeStyle = palette.grid;
       ctx.lineWidth = 1.5 * s;
@@ -117,10 +136,12 @@ export class BarRaceRenderer {
       ctx.lineTo(x, plotBottom);
       ctx.stroke();
       if (i > 0) {
-        ctx.fillText(formatNumber(v, config.valueDecimals), x, plotTop - 14 * s);
+        // 取整显示：auto 时若有 step 是 10^k 倍数，按 step 自适应小数，否则按 valueDecimals
+        const stepDecimals = pickDecimals(scale.step);
+        ctx.fillText(formatNumber(v, stepDecimals), x, plotTop - 14 * s);
       }
     }
-    // x 轴基线
+    // y 轴基线
     ctx.strokeStyle = palette.grid;
     ctx.lineWidth = 2 * s;
     ctx.beginPath();
@@ -128,12 +149,22 @@ export class BarRaceRenderer {
     ctx.lineTo(x0, plotBottom);
     ctx.stroke();
 
-    // ---- 条形（从第 1 名到第 maxBars 名）----
-    frame.bars.forEach((b, i) => {
-      const cy = plotTop + rowH * i + rowH / 2;
+    // ---- 条形（按 prev/next rank 做 y 位置插值；opacity 控制淡入淡出）----
+    ctx.save();
+    frame.bars.forEach((b) => {
+      // 上榜：prevIdx 0..maxBars-1；榜外：maxBars（虚拟"榜外"行）
+      const OFF = maxBars;
+      const prevIdx = Math.min(b.prevRank - 1, OFF);
+      const nextIdx = Math.min(b.nextRank - 1, OFF);
+      const yPrev = plotTop + rowH * prevIdx + rowH / 2;
+      const yNext = plotTop + rowH * nextIdx + rowH / 2;
+      const cy = lerp(yPrev, yNext, progress);
       const y = cy - barH / 2;
       const w = Math.max(xOf(b.value) - x0, 2 * s);
       const color = colorOf(b.entity);
+      const opacity = Math.max(0, Math.min(1, b.opacity));
+
+      ctx.globalAlpha = opacity;
 
       // 排名序号
       if (config.showRank) {
@@ -164,17 +195,17 @@ export class BarRaceRenderer {
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
         if (x0 + w + 14 * s + tw <= W - padX) {
-          // 末端右侧
           ctx.fillStyle = palette.text;
           ctx.fillText(text, x0 + w + 14 * s, cy);
         } else {
-          // 放不下时画在条内右端
           ctx.fillStyle = palette.onBar;
           ctx.textAlign = 'right';
           ctx.fillText(text, x0 + w - 18 * s, cy);
         }
       }
     });
+    ctx.globalAlpha = 1;
+    ctx.restore();
 
     // ---- 标题 / 副标题 ----
     if (config.title) {
@@ -218,6 +249,16 @@ export class BarRaceRenderer {
       }
     }
   }
+}
+
+/** 根据 step 大小自动选显示小数位，避免"500、1000、1500"挂小数尾巴 */
+function pickDecimals(step: number): number {
+  if (!Number.isFinite(step) || step <= 0) return 0;
+  if (step >= 1) return 0;
+  const s = step.toString();
+  const dot = s.indexOf('.');
+  if (dot < 0) return 0;
+  return Math.min(6, s.length - dot - 1);
 }
 
 export const renderer = new BarRaceRenderer();

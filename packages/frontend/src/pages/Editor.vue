@@ -75,6 +75,29 @@
         </label>
 
         <div class="row2">
+          <label class="field">
+            <span>顶部数轴步幅</span>
+            <div class="axis-step-row">
+              <select v-model="axisStepMode" @change="onAxisStepModeChange">
+                <option value="auto">自动</option>
+                <option v-for="s in AXIS_STEP_PRESETS" :key="s" :value="String(s)">{{ formatAxisStep(s) }}</option>
+                <option value="custom">自定义…</option>
+              </select>
+              <input
+                v-if="axisStepMode === 'custom'"
+                v-model.number="cfg.axisStep"
+                type="number"
+                min="0.001"
+                step="any"
+                class="axis-step-input"
+                placeholder="如 1234"
+              />
+            </div>
+            <span class="hint">
+              数据集最大绝对值 ≈ <b>{{ formatAxisStep(maxAbsHint) }}</b>。
+              自动时按 1/2/5 倍数自适应；选「自定义」可让刻度按整百/整千等间距稳定出现。
+            </span>
+          </label>
           <label class="field"><span>数值小数位</span>
             <select v-model.number="cfg.valueDecimals">
               <option :value="0">0 位（1,234）</option>
@@ -82,6 +105,9 @@
               <option :value="2">2 位（1,234.56）</option>
             </select>
           </label>
+        </div>
+
+        <div class="row2">
           <label class="field"><span>字号档</span>
             <select v-model.number="cfg.fontScale">
               <option :value="0.85">小</option>
@@ -157,6 +183,7 @@ import BarChartCanvas from '../components/BarChartCanvas.vue';
 import TimelineControls from '../components/TimelineControls.vue';
 import { progressToOrderF, totalDuration } from '../renderer/frames';
 import { PALETTES } from '../renderer/palettes';
+import type { SeriesPoint } from '@barstudio/shared';
 
 const route = useRoute();
 const projectId = computed(() => Number(route.params.id));
@@ -176,6 +203,47 @@ async function onValueColumnChange() {
     await store.switchValueColumn(valueColumnChoice.value);
   }
 }
+
+// 顶部数轴步幅：自动 / 预设 / 自定义
+const AXIS_STEP_PRESETS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
+function formatAxisStep(v: number): string {
+  if (!Number.isFinite(v)) return '—';
+  return v.toLocaleString('zh-CN', { maximumFractionDigits: 6 });
+}
+/** 根据当前 cfg.axisStep 反推 mode：auto / preset / custom */
+function axisStepModeFromCfg(v: number | undefined): string {
+  if (!v || v <= 0) return 'auto';
+  if (AXIS_STEP_PRESETS.includes(v)) return String(v);
+  return 'custom';
+}
+const axisStepMode = ref(axisStepModeFromCfg(cfg.axisStep));
+function onAxisStepModeChange() {
+  if (axisStepMode.value === 'auto') {
+    cfg.axisStep = 0;
+  } else if (axisStepMode.value === 'custom') {
+    // 切到 custom：若 cfg.axisStep 不在 preset，给当前值兜底；否则用第一个 preset
+    if (!cfg.axisStep || cfg.axisStep <= 0 || AXIS_STEP_PRESETS.includes(cfg.axisStep)) {
+      cfg.axisStep = 1000;
+    }
+  } else {
+    cfg.axisStep = Number(axisStepMode.value);
+  }
+}
+/** cfg 被其它地方改了（保存回来等），同步 mode */
+watch(() => cfg.axisStep, (v) => {
+  const next = axisStepModeFromCfg(v);
+  if (next !== axisStepMode.value) axisStepMode.value = next;
+});
+
+/** 用 dataset 算 maxAbs 提示（与 frames.buildDataset 一致逻辑） */
+const maxAbsHint = computed(() => {
+  // store.dataset.points 来自 SeriesPoint[]；不直接读 dataset.maxAbs 是因为 store 旧 shape 保留
+  const points: SeriesPoint[] = [];
+  for (const m of store.dataset.values.values()) for (const [e, v] of m) if (Number.isFinite(v)) points.push({ time_key: '', time_order: 0, entity: e, value: v });
+  let max = 0;
+  for (const p of points) max = Math.max(max, Math.abs(p.value));
+  return max;
+});
 
 const canvasRef = ref<InstanceType<typeof BarChartCanvas>>();
 const playing = ref(false);
@@ -243,7 +311,7 @@ function stepTime(dir: 1 | -1) {
 }
 
 // 配置变化时重绘当前帧
-watch(() => [cfg.secondsPerStep, cfg.headHold, cfg.tailHold, cfg.maxBars], () => renderCurrent());
+watch(() => [cfg.secondsPerStep, cfg.headHold, cfg.tailHold, cfg.maxBars, cfg.axisStep], () => renderCurrent());
 watch(() => store.dataset, () => renderCurrent());
 
 async function save() {
@@ -276,6 +344,9 @@ onBeforeUnmount(() => {
 .check-row label { display: flex; align-items: center; gap: 6px; }
 .field.slider-field { display: flex; flex-direction: column; gap: 4px; }
 .field.slider-field input[type=range] { width: 100%; }
+.axis-step-row { display: flex; gap: 6px; align-items: center; }
+.axis-step-row select { flex: 1; min-width: 0; }
+.axis-step-row .axis-step-input { width: 110px; }
 .field .hint,
 .slider-field .hint {
   font-size: 11px;
