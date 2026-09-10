@@ -85,7 +85,7 @@
               </select>
               <input
                 v-if="axisStepMode === 'custom'"
-                v-model.number="cfg.axisStep"
+                v-model="axisStepCustom"
                 type="number"
                 min="0.001"
                 step="any"
@@ -225,12 +225,24 @@ function onAxisStepModeChange() {
     if (!cfg.axisStep || cfg.axisStep <= 0 || AXIS_STEP_PRESETS.includes(cfg.axisStep)) {
       cfg.axisStep = 1000;
     }
+    axisStepCustom.value = String(cfg.axisStep);
   } else {
     cfg.axisStep = Number(axisStepMode.value);
   }
 }
-/** cfg 被其它地方改了（保存回来等），同步 mode */
+/**
+ * 自定义步幅输入：独立字符串 ref，避免「清空输入 → cfg.axisStep=''（非法）→
+ * watch 立即跳回 auto 模式 → 输入框消失 / 保存被 zod 拒」的连锁问题。
+ * 只有解析出有效正数才写入 cfg.axisStep。
+ */
+const axisStepCustom = ref(String(cfg.axisStep && cfg.axisStep > 0 ? cfg.axisStep : 1000));
+watch(axisStepCustom, (v) => {
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) cfg.axisStep = n;
+});
+/** cfg 被其它地方改了（保存回来等），同步 mode；正在自定义输入时不抢模式 */
 watch(() => cfg.axisStep, (v) => {
+  if (axisStepMode.value === 'custom') return;
   const next = axisStepModeFromCfg(v);
   if (next !== axisStepMode.value) axisStepMode.value = next;
 });
