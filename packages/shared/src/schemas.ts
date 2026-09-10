@@ -23,6 +23,8 @@ export const renderConfigSchema = z.object({
   fps: z.number().int().min(10).max(60).default(30),
   videoBitsPerSecond: z.number().int().min(1_000_000).max(40_000_000).default(8_000_000),
   valueColumn: z.string().max(64).optional(),
+  /** 顶部数轴刻度步幅；0/未设置 = 自动（nice step） */
+  axisStep: z.number().min(0).max(1e12).optional(),
 });
 
 /** 长表单值导入 payload —— value 允许多种形态（由后端 importService 统一清洗为 number，符合方案 §9 缺失/异常值策略） */
