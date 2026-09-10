@@ -126,7 +126,7 @@ export async function exportVideo(opts: ExportVideoOptions): Promise<ExportResul
 
   // ---- 墙钟驱动渲染循环：按目标帧时刻自校正漂移 ----
   await new Promise<void>((resolve, reject) => {
-    const drawOptions = { width: config.width, height: config.height, config, palette, colorOf, labelWidth };
+    const drawOptions = { width: config.width, height: config.height, config, palette, colorOf, dataset, labelWidth };
 
     const drawAt = (elapsedMs: number) => {
       const p = Math.min(elapsedMs / 1000 / duration, 1);
