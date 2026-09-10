@@ -5,7 +5,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { healthRoutes } from './routes/health';
 import { projectRoutes } from './routes/projects';
@@ -14,7 +14,20 @@ import { recordRoutes } from './routes/records';
 import { datasourceRoutes } from './routes/datasources';
 import db, { DATA_DIR } from './db';
 
-const PORT = Number(process.env.PORT ?? 9200);
+const PORT_FILE = process.env.PORT_FILE ?? path.join(DATA_DIR, 'backend.port');
+const DEFAULT_PORT = 9200;
+const PORT_SEARCH_LIMIT = DEFAULT_PORT + 16;
+
+/** 读 pick-port.mjs 预选的端口（不存在则 null） */
+function readPortFromFile(): number | null {
+  try {
+    const p = Number(readFileSync(PORT_FILE, 'utf-8').trim());
+    return Number.isInteger(p) && p > 0 ? p : null;
+  } catch { return null; }
+}
+
+/** 端口优先级：PORT 环境变量 > 端口文件 > 9200 */
+const PREFERRED_PORT = Number(process.env.PORT ?? 0) || readPortFromFile() || DEFAULT_PORT;
 const HOST = process.env.HOST ?? '127.0.0.1';
 const PID_FILE = process.env.PID_FILE ?? path.join(DATA_DIR, 'backend.pid');
 
@@ -46,15 +59,41 @@ app.setErrorHandler((err, _req, reply) => {
 });
 
 // ---- 启动 ----
-try {
-  await app.listen({ port: PORT, host: HOST });
-  console.log(`[backend] listening on http://${HOST}:${PORT} (API: /api/v1)`);
-  writeFileSync(PID_FILE, String(process.pid));
-  console.log(`[backend] PID ${process.pid} written to ${PID_FILE}`);
-} catch (e) {
-  console.error('[backend] startup failed:', (e as Error).message);
+// Windows 上端口可能落进动态排除区间（EACCES）或被占用（EADDRINUSE）。
+// 显式指定 PORT 时不漂移；否则从 PREFERRED_PORT 向上试探（最多到 9216）。
+const envPortExplicit = Number(process.env.PORT ?? 0) > 0;
+let actualPort = PREFERRED_PORT;
+let listenErr: Error | null = null;
+
+for (let p = PREFERRED_PORT; ; p++) {
+  try {
+    await app.listen({ port: p, host: HOST });
+    actualPort = p;
+    listenErr = null;
+    break;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    listenErr = e as Error;
+    if (envPortExplicit || p >= PORT_SEARCH_LIMIT) break;
+    if (err.code === 'EACCES' || err.code === 'EADDRINUSE') continue; // 换下一个端口重试
+    break; // 其他错误（配置类）不重试
+  }
+}
+
+if (listenErr) {
+  console.error(`[backend] startup failed on port ${actualPort}:`, listenErr.message);
+  if (!envPortExplicit && actualPort === PREFERRED_PORT) {
+    console.error(`[backend] 提示：${DEFAULT_PORT}..${PORT_SEARCH_LIMIT} 区间被系统保留/占用时，可用 PORT 环境变量指定其他端口`);
+  }
   process.exit(1);
 }
+
+const PORT = actualPort;
+// 把实际端口写回端口文件：vite 代理 / e2e 测试脚本都会读它对齐
+writeFileSync(PORT_FILE, String(PORT));
+console.log(`[backend] listening on http://${HOST}:${PORT} (API: /api/v1)`);
+writeFileSync(PID_FILE, String(process.pid));
+console.log(`[backend] PID ${process.pid} written to ${PID_FILE}`);
 
 // ---- 优雅关闭 ----
 // 设计要点：

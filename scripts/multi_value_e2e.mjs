@@ -1,7 +1,8 @@
 /**
  * 多值数据集（multi-value）导入的 e2e 验证
  */
-const ROOT = 'http://127.0.0.1:9200/api/v1';
+import { getBackendPort } from './lib-port.mjs';
+const ROOT = `http://127.0.0.1:${getBackendPort()}/api/v1`;
 const RED = '\x1b[31m', GRN = '\x1b[32m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
 

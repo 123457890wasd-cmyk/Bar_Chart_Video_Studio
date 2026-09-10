@@ -12,7 +12,8 @@
  * - URL 中文编码 / 通配符
  * - wide-by-row 宽表（实测等价）
  */
-const BASE = 'http://127.0.0.1:9200/api/v1';
+import { getBackendPort } from './lib-port.mjs';
+const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;

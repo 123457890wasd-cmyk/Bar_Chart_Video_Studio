@@ -15,7 +15,19 @@ import { execSync } from 'node:child_process';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(here, '..');
 const PID_FILE = path.join(backendRoot, 'data', 'backend.pid');
-const PORT = Number(process.env.PORT || 9200);
+const PORT_FILE = path.join(backendRoot, 'data', 'backend.port');
+
+/** 端口优先级：PORT 环境变量 > 端口文件 > 9200（与 backend/index.ts 一致） */
+function readPort() {
+  const envPort = Number(process.env.PORT || 0);
+  if (Number.isInteger(envPort) && envPort > 0) return envPort;
+  try {
+    const p = Number(readFileSync(PORT_FILE, 'utf-8').trim());
+    if (Number.isInteger(p) && p > 0) return p;
+  } catch { /* 文件不存在 → 默认 */ }
+  return 9200;
+}
+const PORT = readPort();
 
 const cmd = process.argv[2];
 

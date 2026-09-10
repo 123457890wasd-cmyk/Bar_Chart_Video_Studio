@@ -2,7 +2,8 @@
  * 端到端 API 冒烟测试 —— 不依赖任何框架，断言后端业务逻辑正确性
  * 用法：node scripts/e2e.mjs
  */
-const BASE = 'http://127.0.0.1:9200/api/v1';
+import { getBackendPort } from './lib-port.mjs';
+const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
 let pass = 0, fail = 0;
 const fails = [];
 

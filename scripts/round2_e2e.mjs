@@ -11,7 +11,8 @@
  *  - projects PATCH 部分字段（title / description / config）
  *  - BOM 真的不残留 + 同时存在正常数据
  */
-const BASE = 'http://127.0.0.1:9200/api/v1';
+import { getBackendPort } from './lib-port.mjs';
+const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
 const failList = [];

@@ -11,14 +11,16 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getBackendPort } from './lib-port.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const backend = path.join(repoRoot, 'packages', 'backend');
 const pidFile = path.join(backend, 'data', 'backend.pid');
-const nodeBin = 'C:\\Users\\Mr.hancard\\.workbuddy\\binaries\\node\\versions\\22.22.2-2\\node.exe';
+// 用「运行测试的同一 node」拉起后端，避免硬编码另一版本 node 导致原生模块 ABI 不匹配
+const nodeBin = process.execPath;
 const manageScript = path.join(backend, 'scripts', 'manage.mjs');
-const PORT = 9200;
+const PORT = getBackendPort();
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
@@ -81,7 +83,7 @@ function waitForHealth(timeoutMs = 12000) {
         const p = readPidFromFile();
         if (p && isAlive(p)) {
           // 还要 health check 通过
-          const r = spawnSync(nodeBin, ['-e', 'fetch("http://127.0.0.1:9200/api/v1/health").then(r=>r.text()).then(t=>process.exit(t.includes("ok")?0:1)).catch(e=>process.exit(2))'], { encoding: 'utf-8', timeout: 3000 });
+          const r = spawnSync(nodeBin, ['-e', `fetch("http://127.0.0.1:${PORT}/api/v1/health").then(r=>r.text()).then(t=>process.exit(t.includes("ok")?0:1)).catch(e=>process.exit(2))`], { encoding: 'utf-8', timeout: 3000 });
           if (r.status === 0) return resolve(true);
         }
       }

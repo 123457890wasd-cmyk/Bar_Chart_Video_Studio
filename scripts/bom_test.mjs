@@ -3,7 +3,8 @@
  * BOM 专项：验证后端 importService 对 time_key / entity 中残留 BOM 已剥离
  * （修复方案 §9：BOM 探测 → UTF-8 严格 → GBK → 兜底替换）
  */
-const BASE = 'http://127.0.0.1:9200/api/v1';
+import { getBackendPort } from './lib-port.mjs';
+const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
