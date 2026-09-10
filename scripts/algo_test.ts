@@ -239,13 +239,25 @@ assert(s1.ticks.includes(0) && s1.ticks[s1.ticks.length - 1] === s1.scaleMax,
   JSON.stringify(s1.ticks));
 assert(s1.ticks.length >= 3, 'ticks 至少 3 个（避免单步幅过密或过稀）',
   `count=${s1.ticks.length}`);
-assert(s1.ticks.length <= 9, 'ticks 最多 9 个端点（8 个等分区间）',
-  `count=${s1.ticks.length}`);
+// 用户步幅模式：刻度必须是 step 的严格整数倍（用户核心诉求：0/1000/2000/3000…）
+assert(s1.ticks.every((t, i) => Math.abs(t - i * 1000) < 1e-9),
+  'axisStep=1000：每个刻度都是 1000 的整数倍',
+  JSON.stringify(s1.ticks));
 
-// auto 模式（axisStep ≤ 0）：保持旧行为 — scaleMax = maxAbs × 1.05
+// auto 模式（axisStep ≤ 0）：刻度落在 nice step 整数倍，scaleMax ≥ maxAbs×1.05
 const sAuto = computeScale(1000, 0);
-assert(Math.abs(sAuto.scaleMax - 1050) < 1e-6, 'auto：scaleMax = maxAbs × 1.05（兼容旧行为）',
-  `got=${sAuto.scaleMax}`);
+assert(sAuto.scaleMax >= 1000 * 1.05 - 1e-9 && sAuto.scaleMax % sAuto.step === 0,
+  'auto：scaleMax ≥ maxAbs×1.05 且是 step 的整数倍',
+  `got=${sAuto.scaleMax}, step=${sAuto.step}`);
+assert(sAuto.ticks.every((t, i) => Math.abs(t - i * sAuto.step) < 1e-9),
+  'auto：刻度严格落在 step 整数倍上（不再出现 199.5 这类碎刻度）',
+  JSON.stringify(sAuto.ticks));
+
+// 用户步幅过密保护：step 相对 maxAbs 太小（>40 格）→ 回退 auto，避免刻度爆炸
+const sDense = computeScale(1000, 10);
+assert(sDense.ticks.length <= 9 && sDense.step !== 10,
+  'axisStep=10, maxAbs=1000（100 格过密）→ 回退 auto（≤9 端点且 step≠10）',
+  `count=${sDense.ticks.length}, step=${sDense.step}`);
 
 // 极大轴步幅：scaleMax 仍有效（无 inf）
 const sHuge = computeScale(1e6, 50000);

@@ -247,25 +247,32 @@ export function niceStepFromMax(maxAbs: number, targetTicks = 5): number {
 
 /**
  * 根据 axisStep 与全局 maxAbs 计算最终 scaleMax 与可见 ticks 列表。
- * - axisStep <= 0：自动 nice step，scaleMax = maxAbs × 1.05，ticks 沿用 niceStep 等分
- * - axisStep > 0：scaleMax = ceil(maxAbs / axisStep) × axisStep；ticks = 0..ceil(...)
+ * - axisStep <= 0：自动 nice step（1/2/5 × 10^k），刻度落在 step 的整数倍上
+ * - axisStep > 0：scaleMax = ceil(maxAbs / axisStep) × axisStep；刻度 = 0、step、2·step…（严格整数倍）
  *
- * 返回 { scaleMax, ticks: number[] }；ticks 至少含 0。
+ * 返回 { scaleMax, ticks, step }；ticks 至少含 0。
  */
 export interface ScaleResult { scaleMax: number; ticks: number[]; step: number; }
 export function computeScale(maxAbs: number, axisStep: number | undefined, targetTicks = 5): ScaleResult {
   const m = Number.isFinite(maxAbs) && maxAbs > 0 ? maxAbs : 1;
-  let step: number;
+
   if (axisStep && axisStep > 0) {
-    step = axisStep;
-  } else {
-    step = niceStepFromMax(m, targetTicks);
+    const step = axisStep;
+    // 步幅过小导致刻度爆炸（>40 格）时放弃用户步幅，退回 auto，避免画满整排刻度
+    if (Math.ceil(m / step) <= 40) {
+      const scaleMax = Math.max(Math.ceil(m / step) * step, step);
+      const n = Math.round(scaleMax / step);
+      const ticks: number[] = [];
+      for (let i = 0; i <= n; i++) ticks.push(step * i);
+      return { scaleMax, ticks, step };
+    }
   }
-  const scaleMax = axisStep && axisStep > 0
-    ? Math.ceil(m / step) * step
-    : m * 1.05; // 自动模式沿用旧行为（保证头名接近满宽）
-  const ticksCount = Math.max(3, Math.min(8, Math.ceil(scaleMax / step)));
+
+  // auto：nice step，且刻度严格落在 step 整数倍上（头名保留 ≥5% 顶部余量）
+  const step = niceStepFromMax(m, targetTicks);
+  const scaleMax = Math.max(Math.ceil((m * 1.05) / step) * step, step);
+  const n = Math.max(3, Math.min(8, Math.round(scaleMax / step)));
   const ticks: number[] = [];
-  for (let i = 0; i <= ticksCount; i++) ticks.push(Math.round((scaleMax / ticksCount) * i * 1e6) / 1e6);
+  for (let i = 0; i <= n; i++) ticks.push(step * i);
   return { scaleMax, ticks, step };
 }
