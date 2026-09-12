@@ -13,7 +13,7 @@
     "dev": "node packages/backend/scripts/pick-port.mjs && npm-run-all --parallel dev:backend dev:frontend",
     "dev:frontend": "npm run dev -w packages/frontend",
     "dev:backend": "npm run dev -w packages/backend",
-    "build": "npm run build -w packages/shared && npm run build -w packages/backend && npm run build -w packages/frontend",
+    "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
     "start": "npm run start -w packages/backend",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "backend:stop": "npm run stop -w packages/backend",
