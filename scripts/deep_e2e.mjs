@@ -133,26 +133,27 @@ const deepSuite = async () => {
   // 当前实现未按排序入 hash，可能不等 → 标记期望
   // assert(h3 === h1, '行顺序无关（hash 与顺序无关）', `h3=${h3} h1=${h1}`);
 
-  // ─── BOM 测试 ───
+  // ─── BOM 多路径测试 ───
+  // (a) 多部分 CSV 上传 → 走 parseLongCsv（修复 #6：parseLongCsv 现在剥 BOM）
   const csvBom = '\ufeff时间,实体,数值\n2024,A,10\n2024,B,20';
-  const csvEncoder = new TextEncoder();
-  const csvBuf = csvEncoder.encode(csvBom);
-  // 用 multipart 上传触发后端 parseLongCsv
+  const csvBuf = new TextEncoder().encode(csvBom);
   const fd = new FormData();
   fd.append('file', new Blob([csvBuf], { type: 'text/csv' }), 'bom-test.csv');
-  // 注意后端接受的是 multipart → 需要用 @fastify/multipart
-  // 当前测试只验证编码处理路径
-  console.log(`${YEL}ⓘ${RST} BOM 解码测试（方案 §9 要求；前端 decodeFile 缺少 BOM 剥离）`);
+  const bomUp = await fetch(`${BASE}/projects/${emptyId}/datasets/upload`, { method: 'POST', body: fd });
+  const bomUpBody = await bomUp.json().catch(() => ({}));
+  assert(bomUp.status === 201 && (bomUpBody.data?.imported ?? 0) >= 2,
+    'BOM CSV 多部分上传成功（parseLongCsv BOM 剥离）',
+    `status=${bomUp.status}, err=${bomUpBody.error?.message}`);
 
-  // 直接读后端 parseLongCsv 看是否会脏列名（手动模拟）
-  const rowsWithBOM = [{ time_key: '\uFEFF2024', entity: 'A', value: 10 }];
-  const bomR = await req('POST', `/projects/${emptyId}/datasets/import`, { rows: rowsWithBOM });
-  // 后端 schema 是 time_key string，无 trim BOM
   const bomGet = await req('GET', `/projects/${emptyId}/datasets`);
-  const hadBOM = (bomGet.body.data.series ?? bomGet.body.data ?? []).some(r => r.time_key.includes('\uFEFF'));
-  if (hadBOM) {
-    console.log(`${YEL}ⓘ${RST} ⚠️ \uFEFF BOM 残留在 time_key 中（前端导入时会污染列名猜测）`);
-  }
+  const bomRows = bomGet.body.data?.series ?? bomGet.body.data ?? [];
+  const hadBom = Array.isArray(bomRows) && bomRows.some(r =>
+    r.time_key?.includes('\uFEFF') ||
+    r.entity?.includes('\uFEFF') ||
+    Object.keys(r).some(k => k.includes('\uFEFF'))
+  );
+  assert(!hadBom, '多部分 CSV 解析后无 BOM 残留（列名/值干净）',
+    hadBom ? '发现 \uFEFF 残留' : '');
 
   // ─── 上传 multipart 文件 + 字节数 round-trip ───
   const fakeVideo = new Uint8Array(1024 * 256); // 256KB 假 mp4

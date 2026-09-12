@@ -292,7 +292,10 @@ export function hasData(projectId: number): boolean {
 
 /** 后端侧 CSV 长表解析 */
 export function parseLongCsv(text: string): { rows: TimeSeriesRow[]; errors: string[] } {
-  const result = Papa.parse<Record<string, string>>(text.trim(), {
+  // BOM 探测：Excel/记事本另存的 UTF-8 CSV 会带 \uFEFF 首字符。
+  // 不剥会污染第一个列头（"时间" → "\uFEFF时间"），让 pickCol 全部失配。
+  const cleaned = stripBOM(text).trim();
+  const result = Papa.parse<Record<string, string>>(cleaned, {
     header: true,
     skipEmptyLines: true,
   });
