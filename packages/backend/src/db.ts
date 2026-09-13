@@ -21,6 +21,7 @@ mkdirSync(STORAGE_DIR, { recursive: true });
 const db = new Database(path.join(DATA_DIR, 'app.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 3000'); // 写锁短暂等待而非立刻抛 SQLITE_BUSY
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS projects (

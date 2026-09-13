@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import db from '../db';
+import { existsSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
+import db, { STORAGE_DIR } from '../db';
 import { hasData } from '../services/importService';
 import { createProjectSchema, updateProjectSchema, DEFAULT_RENDER_CONFIG } from '@barstudio/shared';
 import type { ProjectInfo, RenderConfig } from '@barstudio/shared';
@@ -70,8 +72,16 @@ export async function projectRoutes(app: FastifyInstance) {
 
   app.delete('/projects/:id', async (req, reply) => {
     const id = Number((req.params as any).id);
+    // 级联删除只清 DB 行，storage 下的成片文件需手动清理
+    const files = db.prepare(
+      'SELECT file_path FROM records WHERE project_id = ? AND file_path IS NOT NULL'
+    ).all(id) as { file_path: string }[];
     const r = db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     if (r.changes === 0) return reply.status(404).send(notFound());
+    for (const f of files) {
+      const full = path.join(STORAGE_DIR, f.file_path);
+      if (existsSync(full)) { try { unlinkSync(full); } catch { /* 单机工具：删不掉不阻塞 */ } }
+    }
     return reply.status(204).send();
   });
 }

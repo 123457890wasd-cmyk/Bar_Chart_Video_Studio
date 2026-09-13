@@ -35,8 +35,6 @@ export const importPayloadSchema = z.object({
     // z.unknown() 比 nullable + optional 更精确：保留所有入参，由后端过滤
     value: z.unknown(),
   })).min(1),
-  /** 是否补 0：实体在某时间点缺失时 */
-  fillMissingWithZero: z.boolean().default(true),
 });
 
 /** 长表多值导入 payload —— 同一行承载多个数值列（如 原始 / 插值 / 填补） */
@@ -51,7 +49,6 @@ export const importMultiValuePayloadSchema = z.object({
   valueColumns: z.array(z.string().min(1).max(64)).min(1),
   /** 默认显示哪一列（可选，未提供时 = valueColumns[0]） */
   defaultValueColumn: z.string().max(64).optional(),
-  fillMissingWithZero: z.boolean().default(true),
 });
 
 export const createProjectSchema = z.object({

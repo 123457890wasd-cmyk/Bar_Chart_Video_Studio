@@ -19,6 +19,11 @@ export async function datasetRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: { code: 'E_EMPTY_TIMESERIES', message: '没有可导入的数据行' } });
     }
     const result = importSeriesRaw(id, rows);
+    if (result.imported === 0) {
+      return reply.status(400).send({
+        error: { code: 'E_EMPTY_TIMESERIES', message: '没有可导入的有效数据行（所有行均解析失败）' },
+      });
+    }
     return reply.status(201).send({ data: { ...result, summary: getSummary(id) } });
   });
 
@@ -54,8 +59,15 @@ export async function datasetRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: { code: 'E_VALIDATION', message: 'sourceUrl 不能为空' } });
       }
       try {
-        const res = await fetch(body.sourceUrl, { headers: { 'user-agent': 'Mozilla/5.0 bar-chart-video-studio' } });
+        const res = await fetch(body.sourceUrl, {
+          headers: { 'user-agent': 'Mozilla/5.0 bar-chart-video-studio' },
+          signal: AbortSignal.timeout(20_000), // 防挂死 URL 长期占用连接
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const len = Number(res.headers.get('content-length') ?? 0);
+        if (Number.isFinite(len) && len > 64 * 1024 * 1024) {
+          throw new Error(`文件过大（${(len / 1048576).toFixed(0)}MB，上限 64MB）`);
+        }
         const buf = await res.arrayBuffer();
         // 编码探测：UTF-8 优先，失败转 GBK
         try {
@@ -116,8 +128,12 @@ export async function datasetRoutes(app: FastifyInstance) {
 
   app.delete('/projects/:id/datasets', async (req, reply) => {
     const id = Number((req.params as any).id);
-    const r = db.prepare('DELETE FROM time_series WHERE project_id = ?').run(id);
-    db.prepare(`UPDATE projects SET dataset_hash = NULL, updated_at = datetime('now') WHERE id = ?`).run(id);
+    // 两条写语句原子化：避免中途崩溃留下"数据已删但 dataset_hash 非空"的中间态
+    const r = db.transaction(() => {
+      const del = db.prepare('DELETE FROM time_series WHERE project_id = ?').run(id);
+      db.prepare(`UPDATE projects SET dataset_hash = NULL, updated_at = datetime('now') WHERE id = ?`).run(id);
+      return del;
+    })();
     return reply.status(200).send({ data: { deleted: r.changes } });
   });
 }

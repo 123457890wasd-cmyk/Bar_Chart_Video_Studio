@@ -71,6 +71,13 @@ export function importSeriesRaw(projectId: number, rows: ImportRowInput[]): Impo
     value: toNumOrNull(r.value) as number,
   }));
   const skipped = rows.length - valid.length;
+  // 全部行无效时拒绝落库：否则下面的"DELETE 全量 + 插入 0 行"事务会把旧数据集清空（数据丢失）
+  if (valid.length === 0) {
+    return {
+      imported: 0, skipped, timeCount: 0, entityCount: 0,
+      dataset_hash: '', valueColumns: ['value'], defaultValueColumn: 'value',
+    };
+  }
   const orderMap = assignTimeOrder(valid);
   const hash = contentHash(JSON.stringify(valid.map(r => [r.time_key, r.entity, r.value])));
 
@@ -124,6 +131,14 @@ export function importSeriesMulti(projectId: number, payload: ImportMultiValueIn
     }
     if (!anyValid) { skipped++; continue; }
     valid.push({ time_key: tk, entity: en, values: cleanedValues });
+  }
+
+  // 全部行无效时拒绝落库：否则事务先删光旧数据、路由层才返回 400，造成"报错但数据已丢"
+  if (valid.length === 0) {
+    return {
+      imported: 0, skipped, timeCount: 0, entityCount: 0,
+      dataset_hash: '', valueColumns: cols, defaultValueColumn: activeCol,
+    };
   }
 
   const synthetic: TimeSeriesRow[] = valid.map(r => ({
@@ -262,8 +277,16 @@ export function getSummary(projectId: number): DatasetSummary {
     timeMin: string | null; timeMax: string | null;
   };
   const meta = getDatasetMeta(projectId);
-  let missingValues = 0;
   const cols = meta.valueColumns;
+  // 与 GET /datasets 的三级解析对齐：project.config.valueColumn 有效时优先于 meta 默认列，
+  // 否则用户切换值列后 summary 仍报旧列，前端列指示显示错误
+  let activeValueColumn = meta.defaultValueColumn;
+  try {
+    const cfgRow = db.prepare('SELECT config FROM projects WHERE id = ?').get(projectId) as { config: string } | undefined;
+    const cfgVc = cfgRow ? (JSON.parse(cfgRow.config)?.valueColumn as unknown) : undefined;
+    if (typeof cfgVc === 'string' && cols.includes(cfgVc)) activeValueColumn = cfgVc;
+  } catch { /* config 损坏时保持默认列 */ }
+  let missingValues = 0;
   if (cols.length > 1 || cols[0] !== 'value') {
     const rs = db.prepare('SELECT values_json FROM time_series WHERE project_id = ?').all(projectId) as { values_json: string | null }[];
     for (const row of rs) {
@@ -281,7 +304,7 @@ export function getSummary(projectId: number): DatasetSummary {
     timeMax: r.timeMax,
     missingValues,
     valueColumns: cols,
-    activeValueColumn: meta.defaultValueColumn,
+    activeValueColumn,
   };
 }
 
@@ -315,9 +338,16 @@ export function parseLongCsv(text: string): { rows: TimeSeriesRow[]; errors: str
   for (const rec of result.data) {
     const t = (rec[timeCol] ?? '').trim();
     const e = (rec[entityCol] ?? '').trim();
-    const v = Number(rec[valueCol]);
+    const rawV = String(rec[valueCol] ?? '').trim();
     if (!t || !e) { errors.push(`存在空 time/entity 的行，已跳过`); continue; }
-    if (!Number.isFinite(v)) { errors.push(`实体「${e}」在「${t}」的数值无法解析，已跳过`); continue; }
+    // 空单元格 = 缺失数据，按缺失跳过（与 toNumOrNull 语义一致）。
+    // 不能用 Number(raw)：Number('') === 0 会把缺测静默导入成 0，柱长失真。
+    const cleaned = rawV.replace(/[,，\s%¥$]/g, '');
+    const v = cleaned === '' || cleaned === '-' || cleaned === '—' ? null : Number(cleaned);
+    if (v === null || !Number.isFinite(v)) {
+      if (rawV !== '') errors.push(`实体「${e}」在「${t}」的数值「${rawV}」无法解析，已跳过`);
+      continue;
+    }
     rows.push({ time_key: t, entity: e, value: v });
   }
   return { rows, errors: errors.slice(0, 20) };

@@ -87,12 +87,15 @@ export class BarRaceRenderer {
     const plotBottom = H - (config.sourceNote ? 64 : 40) * s;
     const plotH = Math.max(plotBottom - plotTop, 10 * s);
 
-    // 实体标签区宽度：按最长实体名测量（稳定，不随帧变化）
+    // 实体标签区宽度：优先用外层按 dataset.entities 全集预预算的稳定值（labelWidth），
+    // 避免逐帧按 frame.bars 实测导致长名实体进出 top-N 时 plotLeft 逐帧跳动；未提供才回退帧内测量
     const nameFont = `${700} ${30 * s * fs}px ${FONT_STACK}`;
-    const maxNameW = Math.min(
-      460 * s,
-      Math.max(120 * s, this.measureLabelWidth(frame.bars.map(b => b.entity), nameFont, ctx))
-    );
+    const maxNameW = opts.labelWidth != null
+      ? opts.labelWidth
+      : Math.min(
+          460 * s,
+          Math.max(120 * s, this.measureLabelWidth(frame.bars.map(b => b.entity), nameFont, ctx))
+        );
     const rankW = config.showRank ? 72 * s : 0;
     const plotLeft = padX + rankW + maxNameW + 24 * s;
     const valueSpace = config.showValues ? 190 * s : 40 * s;

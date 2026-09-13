@@ -137,16 +137,15 @@ async function cmdStop() {
   }
   // 2) 等 6s 让 graceful handler 跑完
   let died = await waitDead(pid, 6000);
-  // 3) Windows 软终止被拒 → 直接 /F；或 6s 仍未死 → /F 兜底
+  // 3) Windows 软终止被拒 → 直接 /F；POSIX 上 SIGTERM 发出但 6s 未退出 → 同样 /F 兜底
+  //    （否则清了 PID 文件进程还活着，status/stop/kill 全部失效成孤儿）
   if (!died) {
-    if (!softOk || isWindows()) {
-      console.warn('[stop] forcing terminate…');
-      if (!sendForceTerminate(pid)) {
-        console.error('[stop] force terminate failed.');
-        process.exit(1);
-      }
-      died = await waitDead(pid, 4000);
+    console.warn('[stop] forcing terminate…');
+    if (!sendForceTerminate(pid)) {
+      console.error('[stop] force terminate failed.');
+      process.exit(1);
     }
+    died = await waitDead(pid, 4000);
   }
   // 4) 最终无论生死都清 PID 文件（后端正常退出也会自己清，这里是兜底）
   clearPidFile();

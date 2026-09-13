@@ -16,7 +16,6 @@ import db, { DATA_DIR } from './db';
 
 const PORT_FILE = process.env.PORT_FILE ?? path.join(DATA_DIR, 'backend.port');
 const DEFAULT_PORT = 9200;
-const PORT_SEARCH_LIMIT = DEFAULT_PORT + 16;
 
 /** 读 pick-port.mjs 预选的端口（不存在则 null） */
 function readPortFromFile(): number | null {
@@ -28,6 +27,8 @@ function readPortFromFile(): number | null {
 
 /** 端口优先级：PORT 环境变量 > 端口文件 > 9200 */
 const PREFERRED_PORT = Number(process.env.PORT ?? 0) || readPortFromFile() || DEFAULT_PORT;
+// 搜索上限相对实际起点：端口文件可能已漂移（如 9214），固定 9216 会把搜索空间压到 3 个
+const PORT_SEARCH_LIMIT = PREFERRED_PORT + 16;
 const HOST = process.env.HOST ?? '127.0.0.1';
 const PID_FILE = process.env.PID_FILE ?? path.join(DATA_DIR, 'backend.pid');
 

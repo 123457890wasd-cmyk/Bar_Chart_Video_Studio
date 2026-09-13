@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, statSync, unlinkSync } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import db, { STORAGE_DIR } from '../db';
 import { createRecordSchema } from '@barstudio/shared';
@@ -58,11 +59,22 @@ export async function recordRoutes(app: FastifyInstance) {
     if (!file) return reply.status(400).send({ error: { code: 'E_VALIDATION', message: '缺少文件' } });
     const ext = (file.filename || 'video.mp4').toLowerCase().endsWith('.webm') ? 'webm' : 'mp4';
     const rel = `${id}-${Date.now()}.${ext}`;
-    const { pipeline } = await import('node:stream/promises');
-    const { createWriteStream } = await import('node:fs');
-    await pipeline(file.file, createWriteStream(path.join(STORAGE_DIR, rel)));
-    const st = (await import('node:fs')).statSync(path.join(STORAGE_DIR, rel));
+    const oldRel = row.file_path;
+    const full = path.join(STORAGE_DIR, rel);
+    try {
+      await pipeline(file.file, createWriteStream(full));
+    } catch (err) {
+      // 中途失败（客户端断开/磁盘满）：清掉半成品，避免磁盘孤儿文件 + DB 无记录
+      try { unlinkSync(full); } catch { /* ignore */ }
+      throw err;
+    }
+    const st = statSync(full);
     db.prepare('UPDATE records SET file_path = ?, size_bytes = ?, format = ? WHERE id = ?').run(rel, st.size, ext, id);
+    // 重复上传覆盖：删除旧存档文件，避免孤儿
+    if (oldRel && oldRel !== rel) {
+      const oldFull = path.join(STORAGE_DIR, oldRel);
+      if (existsSync(oldFull)) { try { unlinkSync(oldFull); } catch { /* 删不掉不阻塞响应 */ } }
+    }
     return reply.status(201).send({ data: { id, file_path: rel, size_bytes: st.size } });
   });
 

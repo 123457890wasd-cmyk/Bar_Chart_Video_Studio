@@ -57,7 +57,9 @@ export const useProjectStore = defineStore('project', () => {
   const palette = computed<Palette>(() => getPalette(draftConfig.value.palette));
   const colorOf = computed(() => makeColorOf(dataset.value.entities, palette.value));
 
-  watch(draftConfig, () => { dirty.value = true; }, { deep: true });
+  // 加载中的程序化写入（loadProject/loadSeries 回填草稿）不计为用户改动，
+  // 否则刚打开项目 dirty 就是 true，"保存配置"按钮常亮
+  watch(draftConfig, () => { if (!loading.value) dirty.value = true; }, { deep: true });
 
   async function loadProject(id: number) {
     loading.value = true;
