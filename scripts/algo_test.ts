@@ -37,6 +37,26 @@ assert(ds1.entities.length === 2, 'entities=2');
 assert(ds1.numericTimes === true, '单时间点 time_key 可解析为数字 → numericTimes=true',
   `numericTimes=${ds1.numericTimes}`);
 
+// 单时间点帧：prevRank/nextRank 必须落在本帧真实位置。
+// 若给 maxBars+1（榜外哨兵），引擎按 (prevIdx→nextIdx) 算 y 会把条形推到 plotBottom
+// 之下 —— 整屏空白（导入只有一年的数据时预览/导出都是空画面）。
+{
+  const fSingle = interpolate(ds1, 0, 15);
+  const ranks = fSingle.bars.map(b => `${b.entity}:${b.rank}/${b.prevRank}/${b.nextRank}`);
+  assert(fSingle.bars.length === 2, 'N=1 帧返回 2 条', ranks.join(' '));
+  assert(fSingle.bars.every((b, i) => b.prevRank === i + 1 && b.nextRank === i + 1),
+    'N=1 帧 prevRank=nextRank=rank（不得为榜外哨兵）', ranks.join(' '));
+  // 复刻 engine.ts 的 y 计算：必须全部落在 [plotTop, plotBottom] 内
+  const plotTop = 94, plotBottom = 1040, rowH = (plotBottom - plotTop) / 15;
+  const outside = fSingle.bars.filter(b => {
+    const idx = Math.min(b.prevRank - 1, 15);
+    const cy = plotTop + rowH * idx + rowH / 2;
+    return cy < plotTop || cy > plotBottom;
+  });
+  assert(outside.length === 0, 'N=1 时所有条形 y 落在绘图区内（不画到画布外）',
+    outside.map(b => b.entity).join(','));
+}
+
 const dsEmpty = buildDataset([]);
 assert(dsEmpty.times.length === 0, '空数据集 times=0');
 assert(interpolate(dsEmpty, 0, 10).bars.length === 0, '空数据 interpolate 返回空 bars');

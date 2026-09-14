@@ -113,18 +113,19 @@ export function interpolate(ds: Dataset, orderF: number, maxBars: number): Inter
   if (N === 0) return { timeLabel: '', timeLabelCont: null, bars: [], progress: 0 };
   if (N === 1) {
     const m = ds.values.get(ds.times[0].order)!;
-    const bars = [...m.entries()]
-      .map(([entity, value]) => ({
-        entity,
-        value,
-        rank: 0,
-        prevRank: maxBars + 1,
-        nextRank: maxBars + 1,
-        opacity: 1,
-      }))
-      .sort((a, b) => b.value - a.value || a.entity.localeCompare(b.entity, 'zh'))
-      .slice(0, maxBars)
-      .map((b, i) => ({ ...b, rank: i + 1 }));
+    const sorted = [...m.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'))
+      .slice(0, maxBars);
+    // 只有一帧，不存在"入场/出场"过渡：prevRank / nextRank 必须落在本帧真实位置上。
+    // 若填 maxBars+1（榜外），引擎的 y 插值会把条形算到 plotBottom 之下 → 整屏空白。
+    const bars: BarState[] = sorted.map(([entity, value], i) => ({
+      entity,
+      value,
+      rank: i + 1,
+      prevRank: i + 1,
+      nextRank: i + 1,
+      opacity: 1,
+    }));
     return { timeLabel: ds.times[0].label, timeLabelCont: null, bars, progress: 0 };
   }
 
