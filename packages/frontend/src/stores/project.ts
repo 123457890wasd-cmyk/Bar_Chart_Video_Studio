@@ -61,18 +61,36 @@ export const useProjectStore = defineStore('project', () => {
   // 否则刚打开项目 dirty 就是 true，"保存配置"按钮常亮
   watch(draftConfig, () => { if (!loading.value) dirty.value = true; }, { deep: true });
 
+  /**
+   * 原地改写 draftConfig，**保持对象引用不变**。
+   *
+   * 为什么不能用 `draftConfig.value = {...}` 整体替换：
+   * Editor.vue / ExportPage.vue 都写 `const cfg = store.draftConfig` 持有对象引用。
+   * 一旦整体替换，消费方的引用会永久失联 —— 表现为：打开项目后配置面板显示默认值、
+   * 编辑不回流到 store（保存无效 / 预览不更新）、dirty 恒为 false（保存按钮灰色、
+   * 离开项目不提示）、导出拿到的仍是默认配置。
+   * 这里先删掉 next 未覆盖的键再做 Object.assign，语义与整体替换等价。
+   */
+  function applyConfig(next: RenderConfig) {
+    const target = draftConfig.value as unknown as Record<string, unknown>;
+    for (const k of Object.keys(target)) {
+      if (!(k in next)) delete target[k];
+    }
+    Object.assign(target, next);
+  }
+
   async function loadProject(id: number) {
     loading.value = true;
     try {
       project.value = await api.get<ProjectInfo>(`/projects/${id}`);
-      draftConfig.value = { ...DEFAULT_RENDER_CONFIG, ...project.value.config };
+      applyConfig({ ...DEFAULT_RENDER_CONFIG, ...project.value.config });
       dirty.value = false;
       await Promise.all([loadSeries(), loadRecords()]);
       // 把后端给的「当前默认列」回填到 draftConfig.valueColumn
       const vc = project.value.config.valueColumn;
       // 真实候选列要从 summary 拿。这里仅用于兜底（多值项目导入时会主动写过 cfg.valueColumn）
       if (vc && valueColumns.value.includes(vc)) {
-        draftConfig.value = { ...draftConfig.value, valueColumn: vc };
+        draftConfig.value.valueColumn = vc;
       }
     } finally {
       loading.value = false;
@@ -94,7 +112,7 @@ export const useProjectStore = defineStore('project', () => {
       activeValueColumn.value = summary.value.activeValueColumn ?? activeValueColumn.value;
       // 把 cfg.valueColumn 在首次加载时回填为 summary 推荐的列
       if (!draftConfig.value.valueColumn) {
-        draftConfig.value = { ...draftConfig.value, valueColumn: activeValueColumn.value };
+        draftConfig.value.valueColumn = activeValueColumn.value;
       }
     }
   }
@@ -110,7 +128,7 @@ export const useProjectStore = defineStore('project', () => {
     await loadSeries();
     // 单值导入：回到默认值 valueColumn='value'
     if (draftConfig.value.valueColumn && draftConfig.value.valueColumn !== 'value') {
-      draftConfig.value = { ...draftConfig.value, valueColumn: 'value' };
+      draftConfig.value.valueColumn = 'value';
       await saveConfig();
     }
     const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
@@ -132,7 +150,7 @@ export const useProjectStore = defineStore('project', () => {
     await loadSeries();
     // 多值导入：把 cfg.valueColumn 切到默认列
     if (draftConfig.value.valueColumn !== defaultValueColumn) {
-      draftConfig.value = { ...draftConfig.value, valueColumn: defaultValueColumn };
+      draftConfig.value.valueColumn = defaultValueColumn;
       await saveConfig();
     }
     const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
@@ -142,7 +160,7 @@ export const useProjectStore = defineStore('project', () => {
   /** 用户在编辑界面切换"横坐标值列" → 立即重载 series 即可（其它无需变） */
   async function switchValueColumn(col: string) {
     if (!project.value) return;
-    draftConfig.value = { ...draftConfig.value, valueColumn: col };
+    draftConfig.value.valueColumn = col;
     activeValueColumn.value = col;
     await loadSeries();
   }
@@ -168,7 +186,7 @@ export const useProjectStore = defineStore('project', () => {
     const fresh = await api.get<ProjectInfo>(`/projects/${project.value.id}`);
     project.value = { ...project.value, dataset_hash: fresh.dataset_hash, updated_at: fresh.updated_at, hasData: fresh.hasData };
     if (draftConfig.value.valueColumn !== 'value') {
-      draftConfig.value = { ...draftConfig.value, valueColumn: 'value' };
+      draftConfig.value.valueColumn = 'value';
     }
   }
 
@@ -183,7 +201,7 @@ export const useProjectStore = defineStore('project', () => {
     records.value = [];
     valueColumns.value = ['value'];
     activeValueColumn.value = 'value';
-    draftConfig.value = { ...DEFAULT_RENDER_CONFIG };
+    applyConfig({ ...DEFAULT_RENDER_CONFIG });
     dirty.value = false;
   }
 
