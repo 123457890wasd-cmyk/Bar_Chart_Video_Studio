@@ -194,13 +194,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import type { DatasourceInfo } from '@barstudio/shared';
 import { api } from '../api/client';
 import { useProjectStore } from '../stores/project';
 import {
-  guessMapping, parseDelimitedText, parseFile,
+  guessMapping, isIdentifierColumn, numericRatioOfColumn, parseDelimitedText, parseFile,
   readXlsxSheet, readXlsxSheets, toLongRows, toMultiValueRows,
   type ColumnMapping, type ParsedTable, type ParsedXlsxResult, type TableMode,
 } from '../importer/parse';
@@ -229,18 +229,23 @@ const pendingXlsxFile = ref<File | null>(null);
 
 const datasources = ref<DatasourceInfo[]>([]);
 
-/** 当前模式下可作为 value 候选的数值列（非 time/entity，且数值比例 > 40%） */
+/**
+ * 当前模式下可作为 value 候选的数值列。
+ * 与 importer/parse.ts 的 guessMapping 同口径：排除 time/entity 列、标识/编码列
+ * （省份代码这类"每行恒定"的列被勾选后会变成一条永远不动的柱），以及已选的主值列
+ * （否则 valueColumns 会出现重复列名，后端 meta 与缺失值统计跟着重复）。
+ */
 const numericCandidateFields = computed(() => {
   if (!parsed.value || mode.value !== 'long') return [];
   const t = parsed.value.fields.indexOf(mapping.value.time);
   const e = parsed.value.fields.indexOf(mapping.value.entity);
-  const ratio = (ci: number) => {
-    const rows = parsed.value!.rows.filter(r => (r[ci] ?? '') !== '');
-    if (rows.length === 0) return 0;
-    const numeric = rows.filter(r => Number.isFinite(Number((r[ci] ?? '').replace(/[,，\s%¥$]/g, ''))));
-    return numeric.length / rows.length;
-  };
-  return parsed.value.fields.filter((_, i) => i !== t && i !== e && ratio(i) > 0.4);
+  const rows = parsed.value.rows;
+  return parsed.value.fields.filter((f, i) =>
+    i !== t && i !== e &&
+    f !== mapping.value.value &&
+    !isIdentifierColumn(f) &&
+    numericRatioOfColumn(rows, i) > 0.4
+  );
 });
 
 const convertResult = computed(() => {
@@ -289,9 +294,12 @@ async function handleTable(t: ParsedTable) {
   reimportOpen.value = true;
 }
 
-async function onFileChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (!file) return;
+/**
+ * 统一的文件装载路径。「点击选择」与「拖拽」必须走同一条逻辑，
+ * 否则两条入口行为会漂移（此前拖拽 xlsx 就漏了自动猜列映射 + 展开导入面板，
+ * 拖进来后 mapping 全空 → 长表模式下报"列映射无效"且没有可提交的转换结果）。
+ */
+async function loadFile(file: File) {
   try {
     const lower = file.name.toLowerCase();
     if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
@@ -302,8 +310,9 @@ async function onFileChange(e: Event) {
       }
       xlsxSheets.value = sheets;
       pendingXlsxFile.value = file;
-      parsed.value = { fields: sheets.fields, rows: sheets.rows, source: 'xlsx' };
-      const guess = guessMapping(parsed.value);
+      const t: ParsedTable = { fields: sheets.fields, rows: sheets.rows, source: 'xlsx' };
+      parsed.value = t;
+      const guess = guessMapping(t);
       if (guess) {
         mode.value = 'long';
         mapping.value = { ...guess, valueCandidates: guess.valueCandidates ?? [] };
@@ -318,6 +327,12 @@ async function onFileChange(e: Event) {
   } catch (err: any) {
     alert(`解析失败：${err.message}`);
   }
+}
+
+async function onFileChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  await loadFile(file);
 }
 
 async function selectSheet(sn: string) {
@@ -336,21 +351,7 @@ async function selectSheet(sn: string) {
 async function onDrop(e: DragEvent) {
   const file = e.dataTransfer?.files?.[0];
   if (!file) return;
-  try {
-    const lower = file.name.toLowerCase();
-    if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
-      const sheets = await readXlsxSheets(file);
-      xlsxSheets.value = sheets;
-      pendingXlsxFile.value = file;
-      parsed.value = { fields: sheets.fields, rows: sheets.rows, source: 'xlsx' };
-    } else {
-      xlsxSheets.value = null;
-      pendingXlsxFile.value = null;
-      await handleTable(await parseFile(file));
-    }
-  } catch (err: any) {
-    alert(`解析失败：${err.message}`);
-  }
+  await loadFile(file);
 }
 
 function parsePaste() {
@@ -421,8 +422,6 @@ async function clearAll() {
   if (!confirm('确定清空该项目的全部数据？此操作不可恢复。')) return;
   await store.clearData();
 }
-
-watch(mode, () => { /* 模式切换时由 computed 重算 */ });
 
 onMounted(async () => {
   await store.loadProject(projectId.value);

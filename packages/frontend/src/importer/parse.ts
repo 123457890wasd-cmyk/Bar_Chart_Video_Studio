@@ -169,23 +169,17 @@ export function guessMapping(table: ParsedTable): ColumnMapping | null {
 
   if (!time || !entity || !value) {
     // 兜底：找数值比例最高的列作 value，第一列作 time、第二列作 entity
-    const numericRatio = (ci: number) => {
-      const nonEmpty = rows.filter(r => (r[ci] ?? '') !== '');
-      if (nonEmpty.length === 0) return 0;
-      const numeric = nonEmpty.filter(r => Number.isFinite(Number(r[ci].replace(/[,，]/g, ''))));
-      return numeric.length / nonEmpty.length;
-    };
     // ★ 关键防御：排除"标识/编码"类列——它们 100% 是数字但语义上不是统计值
     // （如「省份代码」110000：数值比例满格，但每行恒定，作为 value 会导致条形图一动不动）
-    const isIdentifierCol = (f: string) =>
-      /代码|code|id|编号|序号|邮编|区划/i.test(f);
+    // ★ 关键防御：排除"标识/编码"类列——它们 100% 是数字但语义上不是统计值
+    // （如「省份代码」110000：数值比例满格，但每行恒定，作为 value 会导致条形图一动不动）
     // 值列还应是"有变化"的：同一列在不同行间有多个不同取值才像统计数据
     const hasVariance = (ci: number) => {
       const distinct = new Set(rows.map(r => r[ci]));
       return distinct.size > 1;
     };
     const ratios = fields.map((f, i) =>
-      (i < 2 || isIdentifierCol(f) || !hasVariance(i)) ? -1 : numericRatio(i)
+      (i < 2 || isIdentifierColumn(f) || !hasVariance(i)) ? -1 : numericRatioOfColumn(rows, i)
     );
     const valueIdx = ratios.indexOf(Math.max(...ratios));
     if (valueIdx < 2) return null;
@@ -195,20 +189,29 @@ export function guessMapping(table: ParsedTable): ColumnMapping | null {
   }
 
   // 候选"值列"：除时间/实体/标识列外，其它可解析为数值的列都是候选
-  const isIdentifierCol2 = (f: string) => /代码|code|id|编号|序号|邮编|区划/i.test(f);
   const numericCols = fields.filter(f =>
-    f !== time && f !== entity && !isIdentifierCol2(f) &&
+    f !== time && f !== entity && !isIdentifierColumn(f) &&
     numericRatioOfColumn(rows, fields.indexOf(f)) > 0.4
   );
   return { time: time!, entity: entity!, value: value!, valueCandidates: numericCols.length ? numericCols : undefined };
 }
 
-function numericRatioOfColumn(rows: string[][], ci: number): number {
+/**
+ * 某一列的"数值比例"：非空单元格中能被解析为数字的占比。
+ * 统一清洗口径（千分位/空格/百分号/货币符），供 guessMapping 与导入页候选列共用，
+ * 避免两处各写一份导致同一列在不同入口得到不同判定。
+ */
+export function numericRatioOfColumn(rows: string[][], ci: number): number {
   if (!rows.length) return 0;
   const nonEmpty = rows.filter(r => (r[ci] ?? '') !== '');
   if (!nonEmpty.length) return 0;
   const numeric = nonEmpty.filter(r => Number.isFinite(Number((r[ci] ?? '').replace(/[,，\s%¥$]/g, ''))));
   return numeric.length / nonEmpty.length;
+}
+
+/** 标识/编码类列名（省份代码、序号、编号…）：数值比例再高也不是统计值 */
+export function isIdentifierColumn(field: string): boolean {
+  return /代码|code|id|编号|序号|邮编|区划/i.test(field);
 }
 
 export interface ToLongResult {
