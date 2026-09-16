@@ -87,7 +87,7 @@ export async function recordRoutes(app: FastifyInstance) {
     }
     const full = path.join(STORAGE_DIR, row.file_path);
     // 显式设置 Content-Length，否则 Node 读 stream 时部分客户端/代理会显示 0
-    const stat = (await import('node:fs')).statSync(full);
+    const stat = statSync(full);
     reply.header('content-length', String(stat.size));
     reply.header('content-type', row.format === 'webm' ? 'video/webm' : 'video/mp4');
     return (reply as any).send(createReadStream(full));
@@ -99,7 +99,11 @@ export async function recordRoutes(app: FastifyInstance) {
     if (!row) return reply.status(404).send(notFound());
     if (row.file_path) {
       const full = path.join(STORAGE_DIR, row.file_path);
-      if (existsSync(full)) (await import('node:fs')).unlinkSync(full);
+      // Windows 上文件可能被播放器/上传中的句柄占用（EBUSY/EPERM）。
+      // 删不掉文件只应留下磁盘孤儿，不能让整条记录删不掉、更不能冒 500。
+      if (existsSync(full)) {
+        try { unlinkSync(full); } catch { /* 见上 */ }
+      }
     }
     db.prepare('DELETE FROM records WHERE id = ?').run(id);
     return reply.status(204).send();
