@@ -70,12 +70,28 @@ export function getPalette(id: string): Palette {
   return PALETTES.find(p => p.id === id) ?? PALETTES[0];
 }
 
-/** 稳定配色函数：按实体首次出现顺序取色（周期复用） */
+/**
+ * 稳定配色函数：按实体首次出现顺序取色（同一实体全程颜色不变）。
+ *
+ * 调色板每套只有 18 个色值，而 maxBars 最高可设 50 —— 若直接 `i % bars.length` 取色，
+ * 第 19 个实体起会与前面撞色，同屏出现两个一模一样的柱（无法区分）。
+ * 因此超出调色板容量的实体改用黄金角均分色相生成，保证相邻索引色相差异足够大。
+ */
 export function makeColorOf(entities: string[], palette: Palette): (entity: string) => string {
-  const idx = new Map<string, number>();
-  entities.forEach((e, i) => idx.set(e, i));
+  const base = palette.bars;
+  const assigned = new Map<string, number | string>();
+  entities.forEach((e, i) => {
+    if (i < base.length) {
+      assigned.set(e, base[i]);
+    } else {
+      const hue = Math.round((i * 137.508) % 360); // 黄金角 → 相邻色相尽量远离
+      assigned.set(e, `hsl(${hue}, 62%, ${i % 2 ? 46 : 58}%)`);
+    }
+  });
   return (entity: string) => {
-    const i = idx.get(entity) ?? 0;
-    return palette.bars[i % palette.bars.length];
+    const c = assigned.get(entity);
+    if (typeof c === 'string') return c;
+    if (typeof c === 'number') return base[c % base.length];
+    return base[0];
   };
 }

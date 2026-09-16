@@ -101,8 +101,16 @@ export class BarRaceRenderer {
     const valueSpace = config.showValues ? 190 * s : 40 * s;
     const plotW = Math.max(W - plotLeft - padX - valueSpace, 40 * s);
 
-    const maxBars = frame.bars.length || config.maxBars;
-    const rowH = plotH / Math.max(maxBars, 1);
+    // 布局基准固定为「本数据集实际可能显示的条数上限」= min(实体总数, maxBars)，
+    // 不能用 frame.bars.length：某些时间点数据稀疏时（只有少数实体有值）并集会变小，
+    // rowH 随帧突变会导致整组条形的粗细与 y 位置跳动。有 dataset 时用它，否则退回 config。
+    const maxBars = Math.max(
+      1,
+      opts.dataset
+        ? Math.min(opts.dataset.entities.length, config.maxBars)
+        : config.maxBars
+    );
+    const rowH = plotH / maxBars;
     const barH = Math.min(rowH * 0.72, 90 * s);
     const x0 = plotLeft;
     const x1 = plotLeft + plotW;
