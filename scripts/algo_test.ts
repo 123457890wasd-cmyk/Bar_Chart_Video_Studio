@@ -237,7 +237,7 @@ console.log('\n\x1b[1m=== frames.ts 数轴 step 与 scaleMax ===\x1b[0m');
 
 // niceStep 自适应（auto 模式）：maxAbs 落在 1×10^k / 2×10^k / 5×10^k 的就近档
 // 公式 raw = maxAbs / targetTicks；按 raw/base 比例 1/2/5 取就近
-assert(niceStepFromMax(950, 5) === 100, 'maxAbs=950 → raw=190 → step=200（ratio 1.9 → 2，base 100）',
+assert(niceStepFromMax(950, 5) === 100, 'maxAbs=950 → raw=190 → step=100（ratio 1.9 < 2 → 1，base 100）',
   `got=${niceStepFromMax(950, 5)}`);
 assert(niceStepFromMax(1900, 5) === 200, 'maxAbs=1900 → raw=380 → step=200（ratio 3.8 → 2，base 100）',
   `got=${niceStepFromMax(1900, 5)}`);
@@ -272,6 +272,20 @@ assert(sAuto.scaleMax >= 1000 * 1.05 - 1e-9 && sAuto.scaleMax % sAuto.step === 0
 assert(sAuto.ticks.every((t, i) => Math.abs(t - i * sAuto.step) < 1e-9),
   'auto：刻度严格落在 step 整数倍上（不再出现 199.5 这类碎刻度）',
   JSON.stringify(sAuto.ticks));
+
+// ★ auto 模式：ticks 末位必须等于 scaleMax。
+// 曾用 `n = min(8, round(scaleMax/step))` 截断 ticks，导致末位刻度 < scaleMax：
+// 轴顶没有刻度，柱却能画到最后一根网格线之外（950 / 1900 / 4900 等常见 maxAbs 全中）。
+{
+  const bad: string[] = [];
+  for (const m of [950, 1000, 1900, 4500, 4900, 9500, 45000, 49000, 0.3, 1e9]) {
+    const r = computeScale(m, 0);
+    const last = r.ticks[r.ticks.length - 1];
+    if (Math.abs(last - r.scaleMax) > 1e-9) bad.push(`maxAbs=${m}: last=${last} scaleMax=${r.scaleMax}`);
+    if (r.ticks.length > 9) bad.push(`maxAbs=${m}: ticks 过多(${r.ticks.length})`);
+  }
+  assert(bad.length === 0, 'auto：ticks 末位等于 scaleMax（覆盖完整轴，不截断）', bad.join('; '));
+}
 
 // 用户步幅过密保护：step 相对 maxAbs 太小（>40 格）→ 回退 auto，避免刻度爆炸
 const sDense = computeScale(1000, 10);

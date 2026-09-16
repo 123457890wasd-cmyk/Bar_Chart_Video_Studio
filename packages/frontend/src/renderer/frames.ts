@@ -246,6 +246,20 @@ export function niceStepFromMax(maxAbs: number, targetTicks = 5): number {
   return coef * base;
 }
 
+/** 1 / 2 / 5 × 10^k 阶梯上的下一档（用于放大 step 以压缩刻度数） */
+export function nextNiceStep(step: number): number {
+  if (!Number.isFinite(step) || step <= 0) return 1;
+  const exp = Math.floor(Math.log10(step));
+  const base = Math.pow(10, exp);
+  const ratio = step / base;
+  if (ratio < 1.5) return 2 * base;
+  if (ratio < 3.5) return 5 * base;
+  return 10 * base;
+}
+
+/** auto 模式下允许的最大"格数"（刻度点 = n + 1，含 0） */
+const MAX_AUTO_STEPS = 8;
+
 /**
  * 根据 axisStep 与全局 maxAbs 计算最终 scaleMax 与可见 ticks 列表。
  * - axisStep <= 0：自动 nice step（1/2/5 × 10^k），刻度落在 step 的整数倍上
@@ -269,10 +283,17 @@ export function computeScale(maxAbs: number, axisStep: number | undefined, targe
     }
   }
 
-  // auto：nice step，且刻度严格落在 step 整数倍上（头名保留 ≥5% 顶部余量）
-  const step = niceStepFromMax(m, targetTicks);
-  const scaleMax = Math.max(Math.ceil((m * 1.05) / step) * step, step);
-  const n = Math.max(3, Math.min(8, Math.round(scaleMax / step)));
+  // auto：先按 nice step 试算；格数过多时把 step 放大到下一档，直到格数 ≤ MAX_AUTO_STEPS。
+  //
+  // 注意：**不能**用 min(MAX, n) 去截断 ticks —— 那样 ticks 的末位会小于 scaleMax，
+  // 表现为轴顶没有刻度、而且柱会画到最后一根网格线之外（maxAbs=950、1900、4900… 都会命中）。
+  let step = niceStepFromMax(m, targetTicks);
+  let scaleMax = Math.max(Math.ceil((m * 1.05) / step) * step, step);
+  for (let guard = 0; Math.round(scaleMax / step) > MAX_AUTO_STEPS && guard < 10; guard++) {
+    step = nextNiceStep(step);
+    scaleMax = Math.max(Math.ceil((m * 1.05) / step) * step, step);
+  }
+  const n = Math.max(1, Math.round(scaleMax / step));
   const ticks: number[] = [];
   for (let i = 0; i <= n; i++) ticks.push(step * i);
   return { scaleMax, ticks, step };
