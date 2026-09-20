@@ -49,9 +49,16 @@ function normalizeKey(v: unknown): string {
   return stripBOM(String(v ?? '')).trim();
 }
 function toNumOrNull(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = typeof v === 'string' ? Number(v) : (v as number);
-  return Number.isFinite(n) ? n : null;
+  if (v === null || v === undefined) return null;
+  // 字符串要单独走一遍：Number('  ') === 0，只判 v === '' 会让"只含空白的单元格"
+  // 被静默当成 0 导入（柱长失真，且与 parseLongCsv / 前端 toLongRows 的缺失语义不一致）。
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (s === '' || s === '-' || s === '—') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return Number.isFinite(v as number) ? (v as number) : null;
 }
 
 export function importSeries(projectId: number, rows: ImportRowInput[]): ImportResult {
