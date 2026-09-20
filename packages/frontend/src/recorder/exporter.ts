@@ -54,16 +54,40 @@ function pickMimeType(): { mime: string; direct: boolean } {
   throw new Error('当前浏览器不支持 MediaRecorder，请使用 Chrome / Edge');
 }
 
+const FFMPEG_CORE_VERSION = '0.12.6';
+
+/**
+ * 转码内核的候选来源，按顺序尝试。
+ *
+ * 原实现只认 unpkg —— 国内网络经常不可达，结果用户每次导出都静默降级成 WebM，
+ * 拿不到 mp4。这里依次退到 jsdelivr / npmmirror（国内可达性好），
+ * 并优先同源 `/ffmpeg-core/`：把 `ffmpeg-core.js` + `ffmpeg-core.wasm`
+ * 放到 `packages/frontend/public/ffmpeg-core/` 即可完全离线转码。
+ */
+const FFMPEG_CORE_BASES: string[] = [
+  ...(typeof location !== 'undefined' ? [`${location.origin}/ffmpeg-core`] : []),
+  `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`,
+  `https://registry.npmmirror.com/@ffmpeg/core/${FFMPEG_CORE_VERSION}/files/dist/umd`,
+];
+
 async function loadFfmpeg(onLog?: (msg: string) => void): Promise<any> {
   const { FFmpeg } = await import('@ffmpeg/ffmpeg');
   const { toBlobURL } = await import('@ffmpeg/util');
-  const ffmpeg = new FFmpeg();
-  if (onLog) ffmpeg.on('log', ({ message }: any) => onLog(message));
-  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-  const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
-  const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
-  await ffmpeg.load({ coreURL, wasmURL });
-  return ffmpeg;
+  const errors: string[] = [];
+  for (const base of FFMPEG_CORE_BASES) {
+    try {
+      const ffmpeg = new FFmpeg();
+      if (onLog) ffmpeg.on('log', ({ message }: any) => onLog(message));
+      const coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
+      const wasmURL = await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm');
+      await ffmpeg.load({ coreURL, wasmURL });
+      return ffmpeg;
+    } catch (err: any) {
+      errors.push(`${base.replace(/^https?:\/\//, '').slice(0, 48)}: ${err?.message ?? err}`);
+    }
+  }
+  throw new Error(`转码内核加载失败（已尝试 ${FFMPEG_CORE_BASES.length} 个源）→ ${errors.join(' | ')}`);
 }
 
 export async function exportVideo(opts: ExportVideoOptions): Promise<ExportResult> {
