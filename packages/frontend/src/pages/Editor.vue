@@ -183,7 +183,6 @@ import BarChartCanvas from '../components/BarChartCanvas.vue';
 import TimelineControls from '../components/TimelineControls.vue';
 import { progressToOrderF, totalDuration } from '../renderer/frames';
 import { PALETTES } from '../renderer/palettes';
-import type { SeriesPoint } from '@barstudio/shared';
 
 const route = useRoute();
 const projectId = computed(() => Number(route.params.id));
@@ -247,15 +246,8 @@ watch(() => cfg.axisStep, (v) => {
   if (next !== axisStepMode.value) axisStepMode.value = next;
 });
 
-/** 用 dataset 算 maxAbs 提示（与 frames.buildDataset 一致逻辑） */
-const maxAbsHint = computed(() => {
-  // store.dataset.points 来自 SeriesPoint[]；不直接读 dataset.maxAbs 是因为 store 旧 shape 保留
-  const points: SeriesPoint[] = [];
-  for (const m of store.dataset.values.values()) for (const [e, v] of m) if (Number.isFinite(v)) points.push({ time_key: '', time_order: 0, entity: e, value: v });
-  let max = 0;
-  for (const p of points) max = Math.max(max, Math.abs(p.value));
-  return max;
-});
+/** 数据集最大绝对值：直接用 buildDataset 已经算好的 maxAbs，不必再遍历一遍 values 重建数组 */
+const maxAbsHint = computed(() => store.dataset.maxAbs);
 
 const canvasRef = ref<InstanceType<typeof BarChartCanvas>>();
 const playing = ref(false);

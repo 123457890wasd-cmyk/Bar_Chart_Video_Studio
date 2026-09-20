@@ -266,12 +266,8 @@ const convertInfo = computed(() => {
   return base;
 });
 
-const canSubmit = computed(() => {
-  if (mode.value === 'long') {
-    return longRows.value.length > 0;
-  }
-  return longRows.value.length > 0;
-});
+/** 两种模式都以"能转换出有效长表行"为提交前提（多值模式同样先由 toLongRows 试算主列） */
+const canSubmit = computed(() => longRows.value.length > 0);
 
 function toggleExtraColumn(col: string, on: boolean) {
   if (on) {

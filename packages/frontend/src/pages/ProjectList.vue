@@ -6,6 +6,10 @@
     </div>
 
     <div v-if="loading" class="empty">加载中…</div>
+    <div v-else-if="loadError" class="empty card">
+      加载项目列表失败：{{ loadError }}
+      <div style="margin-top: 10px"><button @click="load">重试</button></div>
+    </div>
     <div v-else-if="projects.length === 0" class="empty card">
       还没有项目。点击右上角「新建项目」，然后导入 CSV / Excel 或粘贴表格开始制作。
     </div>
@@ -67,20 +71,26 @@ import { api } from '../api/client';
 const router = useRouter();
 const projects = ref<ProjectInfo[]>([]);
 const loading = ref(true);
+const loadError = ref('');
 const createOpen = ref(false);
 const creating = ref(false);
 const createForm = ref({ title: '', description: '', titleRender: '' });
 
 async function load() {
   loading.value = true;
+  loadError.value = '';
   try {
     projects.value = await api.get<ProjectInfo[]>('/projects');
+  } catch (err: any) {
+    // 不能让"请求失败"和"确实没有项目"落到同一个空列表界面上
+    loadError.value = err?.message ?? String(err);
   } finally {
     loading.value = false;
   }
 }
 
 async function createProject() {
+  if (creating.value) return;
   creating.value = true;
   try {
     const p = await api.post<ProjectInfo>('/projects', {
@@ -91,6 +101,8 @@ async function createProject() {
         : undefined,
     });
     router.push(`/projects/${p.id}/data`);
+  } catch (err: any) {
+    alert(`创建失败：${err?.message ?? err}`);
   } finally {
     creating.value = false;
   }
@@ -98,7 +110,12 @@ async function createProject() {
 
 async function removeProject(p: ProjectInfo) {
   if (!confirm(`确定删除项目「${p.title}」？其数据与成片记录将一并删除。`)) return;
-  await api.del(`/projects/${p.id}`);
+  try {
+    await api.del(`/projects/${p.id}`);
+  } catch (err: any) {
+    alert(`删除失败：${err?.message ?? err}`);
+    return;
+  }
   await load();
 }
 
