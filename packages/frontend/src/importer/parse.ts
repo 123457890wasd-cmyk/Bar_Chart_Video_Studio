@@ -4,7 +4,7 @@
  */
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import type { TimeSeriesRow } from '@barstudio/shared';
+import { decodeBytes, type TimeSeriesRow } from '@barstudio/shared';
 
 export interface ParsedTable {
   fields: string[];
@@ -34,20 +34,10 @@ export interface ParsedXlsxResult {
   rows: string[][];
 }
 
-/** 文本解码：BOM 剥离 → UTF-8 严格 → GBK → 兜底替换（方案 §9） */
+/** 文本解码：BOM 探测（UTF-16 优先）→ UTF-8 严格 → GBK → 兜底替换（方案 §9） */
 export async function decodeFile(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
-  let text: string;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-  } catch {
-    try {
-      text = new TextDecoder('gbk').decode(buf);
-    } catch {
-      text = new TextDecoder('utf-8').decode(buf);
-    }
-  }
-  return stripBOM(text);
+  return stripBOM(decodeBytes(new Uint8Array(buf)));
 }
 
 /** 去掉开头 BOM 字符（UTF-8 \uFEFF / UTF-16 LE / BE 等） */

@@ -3,7 +3,7 @@ import db from '../db';
 import {
   importSeriesRaw, importSeriesMulti, getSeries, getDatasetMeta, getSummary, parseLongCsv,
 } from '../services/importService';
-import { importPayloadSchema, importMultiValuePayloadSchema } from '@barstudio/shared';
+import { importPayloadSchema, importMultiValuePayloadSchema, decodeBytes } from '@barstudio/shared';
 import { notFound, validationError } from './projects';
 
 export async function datasetRoutes(app: FastifyInstance) {
@@ -69,12 +69,8 @@ export async function datasetRoutes(app: FastifyInstance) {
           throw new Error(`文件过大（${(len / 1048576).toFixed(0)}MB，上限 64MB）`);
         }
         const buf = await res.arrayBuffer();
-        // 编码探测：UTF-8 优先，失败转 GBK
-        try {
-          csvText = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-        } catch {
-          csvText = new TextDecoder('gbk').decode(buf);
-        }
+        // 编码探测：UTF-16 BOM → UTF-8 严格 → GBK → 兜底（与前端 decodeFile 同一实现）
+        csvText = decodeBytes(new Uint8Array(buf));
       } catch (e: any) {
         return reply.status(400).send({ error: { code: 'E_CSV_PARSE', message: `抓取失败: ${e.message}` } });
       }
@@ -82,12 +78,7 @@ export async function datasetRoutes(app: FastifyInstance) {
       const file = await (req as any).file();
       if (!file) return reply.status(400).send({ error: { code: 'E_CSV_PARSE', message: '缺少文件' } });
       const buf = await file.toBuffer();
-      try {
-        csvText = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-      } catch {
-        try { csvText = new TextDecoder('gbk').decode(buf); }
-        catch { csvText = new TextDecoder('utf-8').decode(buf); }
-      }
+      csvText = decodeBytes(buf);
     }
 
     const { rows, errors } = parseLongCsv(csvText);
