@@ -21,11 +21,11 @@ function assert(cond, label, detail) {
   else { fail++; console.log(`${RED}✗${RST} ${label}${detail ? ' → ' + YEL + detail + RST : ''}`); }
 }
 
-/** 记录 fill()/stroke() 路径的最小 2D context */
+/** 记录 fill()/stroke()/fillText() 的最小 2D context */
 function makeMockCtx() {
   const ctx = {
     fillStyle: '', strokeStyle: '', lineWidth: 0, font: '', textAlign: '', textBaseline: '', globalAlpha: 1,
-    _path: [], _fills: [], _strokes: [],
+    _path: [], _fills: [], _strokes: [], _texts: [],
     fillRect() {},
     beginPath() { ctx._path = []; },
     moveTo(x, y) { ctx._path.push([x, y]); },
@@ -34,11 +34,17 @@ function makeMockCtx() {
     closePath() {},
     fill() { ctx._fills.push(ctx._path.slice()); },
     stroke() { ctx._strokes.push(ctx._path.slice()); },
-    fillText() {},
+    fillText(t, x, y) { ctx._texts.push({ t: String(t), x, y, font: ctx.font }); },
     measureText(t) { return { width: String(t).length * 12 }; },
     save() {}, restore() {},
   };
   return ctx;
+}
+
+/** 从 "700 30px ..." 中取出字号 */
+function fontPx(font) {
+  const m = /(\d+(?:\.\d+)?)px/.exec(font || '');
+  return m ? Number(m[1]) : 0;
 }
 
 const CFG = {
@@ -59,9 +65,19 @@ function barGeom(ds, orderF, cfg = CFG) {
   // 条形 = fill() 且路径点数 > 4（圆角矩形 8 点）；网格/基线 = stroke()
   const bars = ctx._fills.filter(p => p.length > 4).map(p => {
     const ys = p.map(q => q[1]);
-    return { h: Math.max(...ys) - Math.min(...ys) };
-  });
-  return { shown: frame.bars.length, count: bars.length, barH: bars[0]?.h ?? 0 };
+    return { y0: Math.min(...ys), h: Math.max(...ys) - Math.min(...ys) };
+  }).sort((a, b) => a.y0 - b.y0);
+  return {
+    shown: frame.bars.length,
+    count: bars.length,
+    barH: bars[0]?.h ?? 0,
+    rowH: bars.length > 1 ? bars[1].y0 - bars[0].y0 : 0,
+    nameSize: fontPx(ctx._texts.find(t => /实体/.test(t.t))?.font ?? ''),
+    // 排名数字与实体名同 y（刻度文字在绘图区上方，用 y 对齐来区分）
+    rankSize: fontPx(
+      ctx._texts.find(t => /^\d+$/.test(t.t) && ctx._texts.some(n => /实体/.test(n.t) && Math.round(n.y) === Math.round(t.y)))?.font ?? ''
+    ),
+  };
 }
 
 // ─── 1) 行高/条高跨帧稳定 ───
@@ -93,6 +109,31 @@ const few = barGeom(dsFew, 0.5);
 assert(few.barH > dense.barH,
   '实体数少于 maxBars 时网格按实体数收缩（条更饱满，不留空行）',
   `few=${few.barH.toFixed(1)}px dense=${dense.barH.toFixed(1)}px`);
+
+// ─── 字号随行高自适应 ───
+// rowH = plotH / maxBars：maxBars 拉满（滑块上限 50）时行高只有 ~18px，
+// 若实体名仍按 1080p 基准的 30px（文字占位 ≈1.15 倍）绘制，相邻行会互相压叠。
+const dsMany = buildDataset(
+  Array.from({ length: 60 }, (_, i) => [
+    { time_key: '2020', time_order: 0, entity: `长实体名称${i}`, value: 1000 - i },
+    { time_key: '2021', time_order: 1, entity: `长实体名称${i}`, value: 1000 - i + 3 },
+  ]).flat()
+);
+for (const mb of [5, 15, 30, 50]) {
+  const g = barGeom(dsMany, 0.5, { ...CFG, maxBars: mb, showRank: true });
+  assert(g.nameSize * 1.15 <= g.rowH + 0.5,
+    `maxBars=${mb}：实体名不超行高（${g.nameSize.toFixed(1)}px vs 行高 ${g.rowH.toFixed(1)}px）`,
+    `nameSize=${g.nameSize} rowH=${g.rowH}`);
+  assert(g.rankSize > 0 && g.rankSize * 1.15 <= g.rowH + 0.5,
+    `maxBars=${mb}：排名数字不超行高（${g.rankSize.toFixed(1)}px）`,
+    `rankSize=${g.rankSize} rowH=${g.rowH}`);
+}
+{
+  const g = barGeom(dsMany, 0.5, { ...CFG, maxBars: 5, showRank: true });
+  assert(g.nameSize === 30 && g.rankSize === 26,
+    '行高充足时沿用 1080p 基准字号（实体名 30px / 排名 26px）',
+    `nameSize=${g.nameSize} rankSize=${g.rankSize}`);
+}
 
 // ─── 2) 配色容量 ───
 for (const id of ['flat', 'journal', 'dark']) {

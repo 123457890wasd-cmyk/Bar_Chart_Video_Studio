@@ -87,20 +87,6 @@ export class BarRaceRenderer {
     const plotBottom = H - (config.sourceNote ? 64 : 40) * s;
     const plotH = Math.max(plotBottom - plotTop, 10 * s);
 
-    // 实体标签区宽度：优先用外层按 dataset.entities 全集预预算的稳定值（labelWidth），
-    // 避免逐帧按 frame.bars 实测导致长名实体进出 top-N 时 plotLeft 逐帧跳动；未提供才回退帧内测量
-    const nameFont = `${700} ${30 * s * fs}px ${FONT_STACK}`;
-    const maxNameW = opts.labelWidth != null
-      ? opts.labelWidth
-      : Math.min(
-          460 * s,
-          Math.max(120 * s, this.measureLabelWidth(frame.bars.map(b => b.entity), nameFont, ctx))
-        );
-    const rankW = config.showRank ? 72 * s : 0;
-    const plotLeft = padX + rankW + maxNameW + 24 * s;
-    const valueSpace = config.showValues ? 190 * s : 40 * s;
-    const plotW = Math.max(W - plotLeft - padX - valueSpace, 40 * s);
-
     // 布局基准固定为「本数据集实际可能显示的条数上限」= min(实体总数, maxBars)，
     // 不能用 frame.bars.length：某些时间点数据稀疏时（只有少数实体有值）并集会变小，
     // rowH 随帧突变会导致整组条形的粗细与 y 位置跳动。有 dataset 时用它，否则退回 config。
@@ -111,6 +97,31 @@ export class BarRaceRenderer {
         : config.maxBars
     );
     const rowH = plotH / maxBars;
+
+    // 行高自适应字号：maxBars 拉满（滑块上限 50）时 rowH 会掉到 ~18px，
+    // 仍按 1080p 基准画 30px 的实体名会与相邻行压叠（实测 maxBars≥30 即触发）。
+    // 文字占位约为字号的 1.15 倍，取 rowH 的 0.62 留出余量。
+    const baseNameSize = 30 * s * fs;
+    const nameSize = Math.max(9 * s, Math.min(baseNameSize, rowH * 0.62));
+    const nameScale = nameSize / baseNameSize;
+    const nameFont = `700 ${nameSize}px ${FONT_STACK}`;
+    const rankSize = Math.max(8 * s, Math.min(26 * s * fs, rowH * 0.55));
+    const valueSize = Math.max(9 * s, Math.min(30 * s * fs, rowH * 0.62));
+
+    // 实体标签区宽度：
+    //  - 外层预算是按 30px 基准字号测的，字号缩小时等比缩放，否则会白占宽度
+    //  - 未提供预算时才回退到帧内实测（用当前字号）
+    const maxNameW = opts.labelWidth != null
+      ? opts.labelWidth * nameScale
+      : Math.min(
+          460 * s,
+          Math.max(120 * s, this.measureLabelWidth(frame.bars.map(b => b.entity), nameFont, ctx))
+        );
+    const rankW = config.showRank ? 72 * s : 0;
+    const plotLeft = padX + rankW + maxNameW + 24 * s;
+    const valueSpace = config.showValues ? 190 * s : 40 * s;
+    const plotW = Math.max(W - plotLeft - padX - valueSpace, 40 * s);
+
     const barH = Math.min(rowH * 0.72, 90 * s);
     const x0 = plotLeft;
     const x1 = plotLeft + plotW;
@@ -179,7 +190,7 @@ export class BarRaceRenderer {
 
       // 排名序号
       if (config.showRank) {
-        ctx.font = `700 ${26 * s * fs}px ${NUM_FONT_STACK}`;
+        ctx.font = `700 ${rankSize}px ${NUM_FONT_STACK}`;
         ctx.fillStyle = palette.subText;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
@@ -201,7 +212,7 @@ export class BarRaceRenderer {
       // 数值文本
       if (config.showValues) {
         const text = formatNumber(b.value, config.valueDecimals);
-        ctx.font = `700 ${30 * s * fs}px ${NUM_FONT_STACK}`;
+        ctx.font = `700 ${valueSize}px ${NUM_FONT_STACK}`;
         const tw = ctx.measureText(text).width;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
