@@ -12,11 +12,13 @@ type ProjectRow = {
   dataset_hash: string | null; created_at: string; updated_at: string;
 };
 
-function toInfo(row: ProjectRow): ProjectInfo {
+function toInfo(row: ProjectRow, recordCount?: number): ProjectInfo {
   let config: RenderConfig;
   try { config = { ...DEFAULT_RENDER_CONFIG, ...JSON.parse(row.config) }; }
   catch { config = { ...DEFAULT_RENDER_CONFIG }; }
-  const rc = db.prepare('SELECT COUNT(*) AS c FROM records WHERE project_id = ?').get(row.id) as { c: number };
+  // 列表页会一次性把各项目的成片数查出来传进来；单条查询（详情/创建/更新）时按需再查
+  const rc = recordCount
+    ?? (db.prepare('SELECT COUNT(*) AS c FROM records WHERE project_id = ?').get(row.id) as { c: number }).c;
   return {
     id: row.id,
     title: row.title,
@@ -24,7 +26,7 @@ function toInfo(row: ProjectRow): ProjectInfo {
     config,
     dataset_hash: row.dataset_hash,
     hasData: hasData(row.id),
-    recordCount: rc.c,
+    recordCount: rc,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -33,7 +35,13 @@ function toInfo(row: ProjectRow): ProjectInfo {
 export async function projectRoutes(app: FastifyInstance) {
   app.get('/projects', async () => {
     const rows = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all() as ProjectRow[];
-    return { data: rows.map(toInfo) };
+    // 一次查完全部项目的成片数：原实现靠 toInfo 对每个项目单独 COUNT，项目多时是 N+1
+    const counts = db.prepare(
+      'SELECT project_id, COUNT(*) AS c FROM records GROUP BY project_id'
+    ).all() as { project_id: number; c: number }[];
+    const countMap = new Map(counts.map(r => [r.project_id, r.c]));
+    // 注意不能写 rows.map(toInfo)：Array.map 会把下标当第二个实参传进去
+    return { data: rows.map(r => toInfo(r, countMap.get(r.id) ?? 0)) };
   });
 
   app.post('/projects', async (req, reply) => {
