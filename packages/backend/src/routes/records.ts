@@ -90,6 +90,18 @@ export async function recordRoutes(app: FastifyInstance) {
     const stat = statSync(full);
     reply.header('content-length', String(stat.size));
     reply.header('content-type', row.format === 'webm' ? 'video/webm' : 'video/mp4');
+    // 不设置文件名时，浏览器会拿 URL 的 basename 当文件名 —— 这里就是 "file"，
+    // 连扩展名都没有，下载下来系统不知道该用什么打开。
+    const ext = row.format === 'webm' ? 'webm' : 'mp4';
+    const proj = db.prepare('SELECT title FROM projects WHERE id = ?').get(row.project_id) as { title: string } | undefined;
+    const safeTitle = String(proj?.title ?? 'bar-chart-race').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'bar-chart-race';
+    const stamp = String(row.created_at ?? '').replace(/[-: ]/g, '').slice(0, 8);
+    const human = `${safeTitle}-${stamp || id}.${ext}`;
+    // 标题可能是中文：按 RFC 5987 给 filename*，同时留一个 ASCII fallback
+    reply.header(
+      'content-disposition',
+      `attachment; filename="bar-chart-race-${id}.${ext}"; filename*=UTF-8''${encodeURIComponent(human)}`,
+    );
     return (reply as any).send(createReadStream(full));
   });
 

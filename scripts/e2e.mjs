@@ -185,6 +185,11 @@ async function run() {
   assert(dlRes.status === 200, '下载作品 → 200');
   const dlSize = Number(dlRes.headers.get('content-length'));
   assert(dlSize === blob.size, `下载字节数匹配 (${dlSize} === ${blob.size})`);
+  // 没有文件名时浏览器会把下载存成 URL 的 basename（"file"，无扩展名）
+  const cdisp = dlRes.headers.get('content-disposition') ?? '';
+  assert(/filename\*=UTF-8''.+\.(mp4|webm)/.test(cdisp) && /filename="/.test(cdisp),
+    '下载响应带文件名（含 ASCII fallback + RFC 5987 filename*）',
+    `content-disposition=${cdisp}`);
 
   // 25) 删除作品（同时删文件）
   const delR = await req('DELETE', `/records/${recId}`);
