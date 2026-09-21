@@ -11,8 +11,10 @@
  *  - projects PATCH 部分字段（title / description / config）
  *  - BOM 真的不残留 + 同时存在正常数据
  */
-import { getBackendPort } from './lib-port.mjs';
-const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
+const BASE = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(BASE);
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
 const failList = [];
@@ -155,8 +157,9 @@ const suite = async () => {
   await req('DELETE', `/projects/${pidB}`);
 };
 
-suite().then(() => {
+suite().then(async () => {
   console.log(`\n${pass} 通过, ${fail} 失败`);
   if (fail) failList.forEach(f => console.log('  - ' + f));
+  await cleanup();
   process.exit(fail ? 1 : 0);
 });

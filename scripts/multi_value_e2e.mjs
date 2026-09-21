@@ -1,8 +1,10 @@
 /**
  * 多值数据集（multi-value）导入的 e2e 验证
  */
-import { getBackendPort } from './lib-port.mjs';
-const ROOT = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
+const ROOT = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(ROOT);
 const RED = '\x1b[31m', GRN = '\x1b[32m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
 
@@ -135,6 +137,9 @@ ok(noCols.status === 400, 'valueColumns 空 → 400');
 // 10) 删除
 const del = await req('DELETE', `/projects/${pid}`);
 ok(del.status === 204 || del.status === 200, '删除项目');
+
+// 兜底：把本次新建的其它项目也清掉
+await cleanup();
 
 console.log(`\n--- ${pass} passed, ${fail} failed ---`);
 process.exit(fail === 0 ? 0 : 1);

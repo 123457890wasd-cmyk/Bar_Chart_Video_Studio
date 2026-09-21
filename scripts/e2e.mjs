@@ -2,8 +2,10 @@
  * 端到端 API 冒烟测试 —— 不依赖任何框架，断言后端业务逻辑正确性
  * 用法：node scripts/e2e.mjs
  */
-import { getBackendPort } from './lib-port.mjs';
-const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
+const BASE = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(BASE);
 let pass = 0, fail = 0;
 const fails = [];
 
@@ -215,7 +217,14 @@ async function run() {
   assert(e1.status === 404 || e1.status === 500, '非数字 ID 不导致 5xx 响应格式错乱');
 
   console.log(`\n${pass} passed, ${fail} failed`);
-  if (fail > 0) { console.log('\n失败项:'); fails.forEach(f => console.log(' - ' + f)); process.exit(1); }
+  if (fail > 0) { console.log('\n失败项:'); fails.forEach(f => console.log(' - ' + f)); }
+  // 失败时以前会在这里直接 exit，导致清理被跳过 —— 现在统一先清再退
+  await cleanup();
+  process.exit(fail > 0 ? 1 : 0);
 }
 
-run().catch(e => { console.error('e2e crashed:', e); process.exit(2); });
+run().catch(async (e) => {
+  console.error('e2e crashed:', e);
+  await cleanup();
+  process.exit(2);
+});

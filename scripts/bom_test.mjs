@@ -3,8 +3,10 @@
  * BOM 专项：验证后端 importService 对 time_key / entity 中残留 BOM 已剥离
  * （修复方案 §9：BOM 探测 → UTF-8 严格 → GBK → 兜底替换）
  */
-import { getBackendPort } from './lib-port.mjs';
-const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
+const BASE = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(BASE);
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
@@ -59,8 +61,7 @@ const last = (get2.body.data.series ?? get2.body.data)[0];
 assert(last && last.time_key === '2025' && last.entity === '实体',
   `time_key='${last.time_key}', entity='${last.entity}'`);
 
-// 清理
-await req('DELETE', `/projects/${pid}`);
+await cleanup();
 
 console.log(`\nBOM 专项：${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

@@ -5,8 +5,10 @@
  * 触发 pickCol(['时间']) 全部失配，导入以 E_CSV_PARSE 报错。
  * 期望：上传 \uFEFF 开头的 UTF-8 CSV 也能成功导入。
  */
-import { getBackendPort } from './lib-port.mjs';
-const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
+const BASE = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(BASE);
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
@@ -65,8 +67,7 @@ assert(sumResp.status === 200 && sumJson.data?.entityCount === 2 && sumJson.data
   'summary 端点返回 entityCount=2 timeCount=2',
   `status=${sumResp.status} body=${JSON.stringify(sumJson.data)}`);
 
-// 清理
-await req('DELETE', `/projects/${pid}`);
+await cleanup();
 
 console.log(`\nBOM-multipart 专项：${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

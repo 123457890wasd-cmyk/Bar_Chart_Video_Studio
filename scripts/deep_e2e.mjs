@@ -12,8 +12,10 @@
  * - URL 中文编码 / 通配符
  * - wide-by-row 宽表（实测等价）
  */
-import { getBackendPort } from './lib-port.mjs';
-const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
+const BASE = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(BASE);
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
@@ -187,8 +189,9 @@ const deepSuite = async () => {
   await req('DELETE', `/projects/${emptyId}`);
 };
 
-deepSuite().then(() => {
+deepSuite().then(async () => {
   console.log(`\n${pass + fail} 个断言：${GRN}${pass} 通过${RST}, ${fail ? RED : GRN}${fail} 失败${RST}`);
   if (fail) { console.log('\n' + RED + '失败明细:' + RST); failures.forEach(f => console.log('  - ' + f)); }
+  await cleanup();
   process.exit(fail ? 1 : 0);
 });

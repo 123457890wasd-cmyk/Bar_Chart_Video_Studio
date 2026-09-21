@@ -12,6 +12,7 @@
  */
 import { decodeBytes } from '../packages/shared/src/encoding.ts';
 import { decodeFile, parseCsvFile } from '../packages/frontend/src/importer/parse.ts';
+import { installAutoCleanup } from './lib-test-utils.mjs';
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
 let pass = 0, fail = 0;
@@ -88,6 +89,8 @@ const CSV = '时间,实体,数值\n2024,北京,100\n2025,上海,200';
   if (!base) {
     console.log(`${YEL}ⓘ${RST} 后端未运行，跳过 multipart 端到端断言（跑 e2e 前请先启动后端）`);
   } else {
+    // 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+    const cleanup = await installAutoCleanup(base);
     const pj = await (await fetch(`${base}/projects`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'UTF-16 导入' }),
@@ -105,7 +108,7 @@ const CSV = '时间,实体,数值\n2024,北京,100\n2025,上海,200';
     assert(rows.length === 2 && rows.every(r => r.entity && r.value > 0),
       '后端解析 UTF-16 CSV → 2 行（2 时间点 × 1 实体）数值正常',
       JSON.stringify(rows.slice(0, 2)));
-    await fetch(`${base}/projects/${pid}`, { method: 'DELETE' });
+    await cleanup();
   }
 }
 

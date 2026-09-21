@@ -14,9 +14,11 @@
  */
 import { existsSync, mkdirSync, unlinkSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
-import { getBackendPort } from './lib-port.mjs';
+import { apiBase, installAutoCleanup } from './lib-test-utils.mjs';
 
-const BASE = `http://127.0.0.1:${getBackendPort()}/api/v1`;
+const BASE = apiBase();
+// 本次新建的项目在结束时自动清掉（断言失败 / 崩溃同样会清）
+const cleanup = await installAutoCleanup(BASE);
 const STORAGE = path.resolve('packages/backend/storage');
 
 const RED = '\x1b[31m', GRN = '\x1b[32m', YEL = '\x1b[33m', RST = '\x1b[0m';
@@ -77,9 +79,9 @@ const list = await req('GET', `/records?projectId=${pid}`);
 const stillThere = (list.body.data ?? []).some(r => r.id === rid);
 assert(!stillThere, 'DB 记录已被清除（不再出现在列表里）', `stillThere=${stillThere}`);
 
-// 清理：目录残留不应阻塞（修复后磁盘上可能留孤儿目录，手工清）
+// 目录残留不应阻塞（修复后磁盘上可能留孤儿目录，手工清）
 try { if (existsSync(full)) rmdirSync(full); } catch { /* ignore */ }
-await req('DELETE', `/projects/${pid}`);
+await cleanup();
 
 console.log(`\n记录删除容错：${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);
